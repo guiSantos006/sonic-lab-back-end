@@ -1,4 +1,4 @@
-package com.soniclab.soniclabbackend.user.model;
+package com.soniclab.soniclabbackend.user.entity;
 
 import java.util.UUID;
 
