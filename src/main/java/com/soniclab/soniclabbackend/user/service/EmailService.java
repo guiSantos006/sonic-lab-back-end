@@ -1,36 +1,44 @@
 package com.soniclab.soniclabbackend.user.service;
 
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.mail.SimpleMailMessage;
 import org.springframework.mail.javamail.JavaMailSender;
+import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 
+@Slf4j
 @Service
 public class EmailService {
 
     private final JavaMailSender mailSender;
 
+    @Value("${app.frontend.url:http://localhost:3000}")
+    private String frontendUrl;
+
     public EmailService(JavaMailSender mailSender) {
         this.mailSender = mailSender;
     }
 
+    @Async
     public void sendPasswordResetEmail(String recipientEmail, String token) {
         try {
             SimpleMailMessage message = new SimpleMailMessage();
             message.setTo(recipientEmail);
-            message.setSubject("SonicLab  Recuperação de Senha");
+            message.setSubject("SonicLab - Recuperação de Senha");
 
-            String resetUrl = "http://localhost:8080/auth/reset-password?token=" + token;
+            String resetUrl = frontendUrl + "/reset-password?token=" + token;
 
-            message.setText("Olá,  Recebemos um pedido para redefinir a sua senha na SonicLab.\n\n" +
-                    "Clique aqui para criar uma nova senha (válido por 15 minutos):\n" +
+            message.setText("Olá,\n\n" +
+                    "Recebemos uma solicitação para redefinir a sua senha na SonicLab.\n\n" +
+                    "Acesse o link abaixo para criar uma nova senha (válido por 30 minutos):\n" +
                     resetUrl + "\n\n" +
-                    "Se voce não pediu, ignore esse email.");
+                    "Se você não solicitou a alteração, ignore este e-mail.");
 
             mailSender.send(message);
-            System.out.println("E-MAIL DE RECUPERAÇÃO ENVIADO COM SUCESS");
+            log.info("E-mail de recuperação de senha enviado com sucesso para: {}", recipientEmail);
         } catch (Exception e) {
-            System.out.println("ERRO AO ENVIAR E-MAIL DE RECUPERAÇÃO: " + e.getMessage());
-            e.printStackTrace();
+            log.error("Erro ao enviar e-mail de recuperação para {}: {}", recipientEmail, e.getMessage(), e);
         }
     }
 }
