@@ -20,10 +20,14 @@ public class EmailService {
         this.mailSender = mailSender;
     }
 
+    @Value("${spring.mail.username:noreply@soniclab.com}")
+    private String senderEmail;
+
     @Async
     public void sendPasswordResetEmail(String recipientEmail, String token) {
         try {
             SimpleMailMessage message = new SimpleMailMessage();
+            message.setFrom("SonicLab <noreply@soniclab.com>"); // Remetente obrigatório
             message.setTo(recipientEmail);
             message.setSubject("SonicLab - Recuperação de Senha");
 
