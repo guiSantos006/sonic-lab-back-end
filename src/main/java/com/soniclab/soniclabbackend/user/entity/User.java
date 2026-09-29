@@ -1,5 +1,6 @@
 package com.soniclab.soniclabbackend.user.entity;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import lombok.AccessLevel;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
@@ -28,6 +29,7 @@ public class User implements UserDetails {
     @Indexed(unique = true)
     private String email;
 
+    @JsonIgnore
     private String password;
 
     private UserRole userRole;
