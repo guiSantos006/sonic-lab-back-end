@@ -19,6 +19,9 @@ import java.util.UUID;
 @Component
 public class TokenConfig {
 
+    public static final String PURPOSE_ACCESS = "access";
+    public static final String PURPOSE_PASSWORD_RESET = "password_reset";
+
     @Value("${api.security.token.secret}")
     private String secret;
 
@@ -36,6 +39,7 @@ public class TokenConfig {
                     .withSubject(user.getEmail())
                     .withClaim("userId", user.getId().uuid().toString())
                     .withClaim("role", user.getUserRole() != null ? user.getUserRole().name() : UserRole.USER.name())
+                    .withClaim("purpose", PURPOSE_ACCESS)
                     .withExpiresAt(getExpirationDate())
                     .sign(algorithm);
         } catch (JWTCreationException exception) {
@@ -46,11 +50,14 @@ public class TokenConfig {
     public String generatePasswordResetToken(User user) {
         try {
             Algorithm algorithm = Algorithm.HMAC256(secret);
+            String pwdSig = extractPasswordSignature(user.getPassword());
+
             return JWT.create()
                     .withIssuer(issuer)
                     .withSubject(user.getEmail())
                     .withClaim("userId", user.getId().uuid().toString())
-                    .withClaim("purpose", "password_reset")
+                    .withClaim("purpose", PURPOSE_PASSWORD_RESET)
+                    .withClaim("pwdSig", pwdSig)
                     .withExpiresAt(Instant.now().plus(30, ChronoUnit.MINUTES))
                     .sign(algorithm);
         } catch (JWTCreationException exception) {
@@ -58,13 +65,18 @@ public class TokenConfig {
         }
     }
 
-    public Optional<JWTUserData> validateToken(String token) {
+    public Optional<JWTUserData> validateAccessToken(String token) {
         try {
             Algorithm algorithm = Algorithm.HMAC256(secret);
             DecodedJWT decodedJWT = JWT.require(algorithm)
                     .withIssuer(issuer)
                     .build()
                     .verify(token);
+
+            String purpose = decodedJWT.getClaim("purpose").asString();
+            if (PURPOSE_PASSWORD_RESET.equals(purpose)) {
+                return Optional.empty();
+            }
 
             String rawUserId = decodedJWT.getClaim("userId").asString();
             String email = decodedJWT.getSubject();
@@ -88,6 +100,36 @@ public class TokenConfig {
         } catch (JWTVerificationException | IllegalArgumentException exception) {
             return Optional.empty();
         }
+    }
+
+    public Optional<DecodedJWT> validatePasswordResetToken(String token) {
+        try {
+            Algorithm algorithm = Algorithm.HMAC256(secret);
+            DecodedJWT decodedJWT = JWT.require(algorithm)
+                    .withIssuer(issuer)
+                    .build()
+                    .verify(token);
+
+            String purpose = decodedJWT.getClaim("purpose").asString();
+            if (!PURPOSE_PASSWORD_RESET.equals(purpose)) {
+                return Optional.empty();
+            }
+
+            return Optional.of(decodedJWT);
+        } catch (JWTVerificationException | IllegalArgumentException exception) {
+            return Optional.empty();
+        }
+    }
+
+    public Optional<JWTUserData> validateToken(String token) {
+        return validateAccessToken(token);
+    }
+
+    public static String extractPasswordSignature(String password) {
+        if (password == null || password.length() < 10) {
+            return password != null ? password : "";
+        }
+        return password.substring(password.length() - 10);
     }
 
     private Instant getExpirationDate() {
