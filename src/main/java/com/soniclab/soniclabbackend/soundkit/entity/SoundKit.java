@@ -32,14 +32,14 @@ public class SoundKit {
     private BigDecimal price;
 
     @Indexed
-    private UserId creatorId; // ✅ Tipagem coerente com User e mapeada para UUID
+    private UserId creatorId;
 
     private KitType type;
 
     private String coverUrl;
-    private String demoAudioUrl;
     private String fileUrl;
-    private Long fileSizeBytes;
+
+    private AudioDemo audioDemo;
 
     private List<String> tags = new ArrayList<>();
     private Map<String, String> specifications = new HashMap<>();
