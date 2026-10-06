@@ -18,9 +18,9 @@ public interface SoundKitRepository extends MongoRepository<SoundKit, SoundKitId
     Page<SoundKit> findByActiveTrue(Pageable pageable);
 
     
-    Page<SoundKit> findByCreatorId(UserId creatorId, Pageable pageable);
+    Page<SoundKit> findByCreatorIdAndActiveTrue(UserId creatorId, Pageable pageable);
 
-    long countByCreatorId(UserId creatorId);
+    long countByCreatorIdAndActiveTrue(UserId creatorId);
 }
 
 

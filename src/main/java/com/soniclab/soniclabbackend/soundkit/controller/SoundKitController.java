@@ -47,7 +47,8 @@ public class SoundKitController {
 
     @GetMapping("/{id}")
     public ResponseEntity<SoundKitResponse> getById(@PathVariable UUID id) {
-        return ResponseEntity.ok(SoundKitResponse.fromEntity(soundKitService.getActiveById(id)));
+        var response = soundKitService.getActiveById(id);
+        return ResponseEntity.ok(response);
     }
 
 
