@@ -1,15 +1,15 @@
 package com.soniclab.soniclabbackend.soundkit.controller;
 
 import com.soniclab.soniclabbackend.soundkit.dto.request.CreateSoundKitRequest;
+import com.soniclab.soniclabbackend.soundkit.dto.request.SoundKitFilterParams;
 import com.soniclab.soniclabbackend.soundkit.dto.response.PageResponse;
 import com.soniclab.soniclabbackend.soundkit.dto.response.SoundKitResponse;
-import com.soniclab.soniclabbackend.soundkit.entity.KitType;
 import com.soniclab.soniclabbackend.soundkit.service.SoundKitService;
 import com.soniclab.soniclabbackend.user.config.JWTUserData;
 import jakarta.validation.Valid;
-import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
+import org.springframework.data.web.PageableDefault;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
@@ -19,19 +19,14 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.List;
-import java.util.Set;
 import java.util.UUID;
 
 @RestController
 @RequestMapping("/soundkits")
 public class SoundKitController {
-
-    private static final Set<String> SORTABLE_FIELDS = Set.of("createdAt", "price", "title");
-    private static final int MAX_PAGE_SIZE = 50;
 
     private final SoundKitService soundKitService;
 
@@ -43,16 +38,11 @@ public class SoundKitController {
 
     @GetMapping
     public ResponseEntity<PageResponse<SoundKitResponse>> list(
-            @RequestParam(required = false) String q,
-            @RequestParam(required = false) KitType type,
-            @RequestParam(required = false) List<String> tags,
-            @RequestParam(defaultValue = "0") int page,
-            @RequestParam(defaultValue = "12") int size,
-            @RequestParam(defaultValue = "createdAt") String sortBy,
-            @RequestParam(defaultValue = "desc") String direction
+            SoundKitFilterParams filterParams,
+            @PageableDefault(size = 20, sort = "createdAt", direction = Sort.Direction.DESC) Pageable pageable
     ) {
-        var result = soundKitService.search(q, type, tags, null, null, buildPageable(page, size, sortBy, direction));
-        return ResponseEntity.ok(PageResponse.from(result, SoundKitResponse::fromEntity));
+        var response = soundKitService.search(filterParams, pageable);
+        return ResponseEntity.ok(response);
     }
 
     @GetMapping("/{id}")
@@ -84,10 +74,4 @@ public class SoundKitController {
     }
 
 
-
-    private Pageable buildPageable(int page, int size, String sortBy, String direction) {
-        String field = SORTABLE_FIELDS.contains(sortBy) ? sortBy : "createdAt";
-        Sort.Direction dir = "asc".equalsIgnoreCase(direction) ? Sort.Direction.ASC : Sort.Direction.DESC;
-        return PageRequest.of(Math.max(page, 0), Math.min(Math.max(size, 1), MAX_PAGE_SIZE), Sort.by(dir, field));
-    }
 }
