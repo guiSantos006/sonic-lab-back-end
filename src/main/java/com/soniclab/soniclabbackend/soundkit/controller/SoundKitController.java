@@ -10,17 +10,12 @@ import jakarta.validation.Valid;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
 import org.springframework.data.web.PageableDefault;
-import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
-import org.springframework.web.bind.annotation.DeleteMapping;
-import org.springframework.web.bind.annotation.GetMapping;
-import org.springframework.web.bind.annotation.PathVariable;
-import org.springframework.web.bind.annotation.PostMapping;
-import org.springframework.web.bind.annotation.RequestBody;
-import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.bind.annotation.*;
+import org.springframework.web.servlet.support.ServletUriComponentsBuilder;
 
+import java.net.URI;
 import java.util.List;
 import java.util.UUID;
 
@@ -34,45 +29,61 @@ public class SoundKitController {
         this.soundKitService = soundKitService;
     }
 
-    // ---------- Público ----------
+    // ==========================================
+    // Endpoints Públicos
+    // ==========================================
 
     @GetMapping
     public ResponseEntity<PageResponse<SoundKitResponse>> list(
             SoundKitFilterParams filterParams,
             @PageableDefault(size = 20, sort = "createdAt", direction = Sort.Direction.DESC) Pageable pageable
     ) {
-        var response = soundKitService.search(filterParams, pageable);
-        return ResponseEntity.ok(response);
+        return ResponseEntity.ok(soundKitService.search(filterParams, pageable));
     }
 
     @GetMapping("/{id}")
     public ResponseEntity<SoundKitResponse> getById(@PathVariable UUID id) {
-        var response = soundKitService.getActiveById(id);
-        return ResponseEntity.ok(response);
+        return ResponseEntity.ok(soundKitService.getActiveById(id));
     }
-
 
     @GetMapping("/tags")
     public ResponseEntity<List<String>> listTags() {
         return ResponseEntity.ok(soundKitService.listTags());
     }
 
-    // ---------- Quando tiver Autenticado ----------
+    // ==========================================
+    // Endpoints Autenticados
+    // ==========================================
 
     @PostMapping
     public ResponseEntity<SoundKitResponse> create(
             @Valid @RequestBody CreateSoundKitRequest request,
             @AuthenticationPrincipal JWTUserData user
     ) {
-        var created = soundKitService.create(request, user);
-        return ResponseEntity.status(HttpStatus.CREATED).body(SoundKitResponse.fromEntity(created));
+        SoundKitResponse response = soundKitService.create(request, user);
+
+        URI location = ServletUriComponentsBuilder.fromCurrentRequest()
+                .path("/{id}")
+                .buildAndExpand(response.id())
+                .toUri();
+
+        return ResponseEntity.created(location).body(response);
+    }
+
+    @GetMapping("/my-kits")
+    public ResponseEntity<PageResponse<SoundKitResponse>> listMyKits(
+            @AuthenticationPrincipal JWTUserData user,
+            @PageableDefault(size = 20, sort = "createdAt", direction = Sort.Direction.DESC) Pageable pageable
+    ) {
+        return ResponseEntity.ok(soundKitService.listByCreator(user, pageable));
     }
 
     @DeleteMapping("/{id}")
-    public ResponseEntity<Void> delete(@PathVariable UUID id, @AuthenticationPrincipal JWTUserData user) {
+    public ResponseEntity<Void> delete(
+            @PathVariable UUID id,
+            @AuthenticationPrincipal JWTUserData user
+    ) {
         soundKitService.deactivate(id, user);
         return ResponseEntity.noContent().build();
     }
-
-
 }
