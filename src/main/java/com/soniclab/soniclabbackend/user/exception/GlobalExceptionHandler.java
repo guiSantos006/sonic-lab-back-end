@@ -9,6 +9,7 @@ import org.springframework.validation.FieldError;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import com.soniclab.soniclabbackend.soundkit.exception.SoundKitNotFoundException;
 
 import java.util.HashMap;
 import java.util.Map;
@@ -63,5 +64,11 @@ public class GlobalExceptionHandler {
         log.error("Erro interno não tratado: {}", exception.getMessage(), exception);
         return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
                 .body(new ApiErrorResponse(HttpStatus.INTERNAL_SERVER_ERROR.value(), "Internal Server Error", "Ocorreu um erro interno no servidor."));
+    }
+
+    @ExceptionHandler(SoundKitNotFoundException.class)
+    public ResponseEntity<ApiErrorResponse> handleSoundKitNotFound(SoundKitNotFoundException exception) {
+        return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                .body(new ApiErrorResponse(HttpStatus.NOT_FOUND.value(), "Not Found", exception.getMessage()));
     }
 }
