@@ -1,4 +1,4 @@
-# 🎵 SonicLab - Back-end API
+# SonicLab - Back-end API
 
 ![Java 21](https://img.shields.io/badge/Java-21-orange.svg)
 ![Spring Boot](https://img.shields.io/badge/Spring%20Boot-4.1.1-brightgreen.svg)
@@ -14,7 +14,7 @@ Em essência, o SonicLab soluciona o problema da dispersão de arquivos e da fal
 
 ---
 
-## 📑 Sumário
+## Sumário
 
 - [O Que o Sistema Faz](#-o-que-o-sistema-faz)
 - [Funcionalidades](#-funcionalidades)
@@ -29,7 +29,7 @@ Em essência, o SonicLab soluciona o problema da dispersão de arquivos e da fal
 
 ---
 
-## 🎧 O Que o Sistema Faz
+## O Que o Sistema Faz
 
 O sistema foi arquitetado para atender de ponta a ponta as demandas do fluxo de trabalho musical, entregando valor direto tanto para quem consome quanto para quem cria:
 
@@ -40,7 +40,7 @@ O sistema foi arquitetado para atender de ponta a ponta as demandas do fluxo de 
 
 ---
 
-## ✨ Funcionalidades
+## Funcionalidades
 
 - **Autenticação & Usuários**:
   - Cadastro de usuários com validação forte de credenciais (regras de complexidade e unicidade de e-mail).
@@ -64,7 +64,7 @@ O sistema foi arquitetado para atender de ponta a ponta as demandas do fluxo de 
 
 ---
 
-## 🛠️ Tecnologias Utilizadas
+## Tecnologias Utilizadas
 
 - **Linguagem:** Java 21 (LTS)
 - **Framework:** Spring Boot 4.1.1
@@ -82,7 +82,7 @@ O sistema foi arquitetado para atender de ponta a ponta as demandas do fluxo de 
 
 ---
 
-## 🚀 Pré-requisitos e Instalação
+## Pré-requisitos e Instalação
 
 ### Pré-requisitos
 
@@ -120,7 +120,7 @@ A API estará acessível em `http://localhost:8080`.
 
 ---
 
-## ⚙️ Variáveis de Ambiente e Configuração
+## Variáveis de Ambiente e Configuração
 
 O projeto adota o padrão **12-Factor App**, permitindo que todas as propriedades sejam injetadas via variáveis de ambiente, mantendo valores padrão seguros e prontos para desenvolvimento local.
 
@@ -158,7 +158,7 @@ cp .env.example .env
 
 ---
 
-## 📖 Documentação da API com Swagger
+## Documentação da API com Swagger
 
 A API possui integração nativa com o **SpringDoc OpenAPI**. Mesmo com especificações e anotações customizadas em evolução contínua, os endpoints e esquemas estão disponíveis para exploração e testes interativos:
 
@@ -174,7 +174,7 @@ Bearer <seu_token_aqui>
 
 ---
 
-## 🔒 Autenticação e Autorização
+## Autenticação e Autorização
 
 ### Formato do Token
 
@@ -204,7 +204,7 @@ Endpoints sensíveis contam com proteção por IP em janela deslizante de 1 minu
 
 ---
 
-## 💡 Exemplos de Uso
+## Exemplos de Uso
 
 ### 1. Registrar Usuário
 ```bash
@@ -292,7 +292,7 @@ curl -X POST http://localhost:8080/soundkits \
 
 ---
 
-## ⚠️ Tratamento de Erros
+## Tratamento de Erros
 
 A API possui um interceptador global de exceções (`@RestControllerAdvice`) que padroniza todas as respostas de erro no seguinte formato:
 
@@ -325,7 +325,7 @@ A API possui um interceptador global de exceções (`@RestControllerAdvice`) que
 
 ---
 
-## 📄 Licença e Contribuição
+## Licença e Contribuição
 
 ### Licença
 
