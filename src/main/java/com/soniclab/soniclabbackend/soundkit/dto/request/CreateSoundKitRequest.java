@@ -3,10 +3,7 @@ package com.soniclab.soniclabbackend.soundkit.dto.request;
 import com.soniclab.soniclabbackend.soundkit.entity.AudioDemo;
 import com.soniclab.soniclabbackend.soundkit.entity.KitType;
 import jakarta.validation.Valid;
-import jakarta.validation.constraints.DecimalMin;
-import jakarta.validation.constraints.NotBlank;
-import jakarta.validation.constraints.NotNull;
-import jakarta.validation.constraints.Size;
+import jakarta.validation.constraints.*;
 
 import java.math.BigDecimal;
 import java.time.Instant;
@@ -31,12 +28,18 @@ public record CreateSoundKitRequest(
 
         String coverUrl,
 
+
+
+        @NotBlank(message = "O arquivo do kit é obrigatório")
         String fileUrl,
 
+        @NotBlank(message = "O arquivo do demo é obrigatório")
         @Valid
         AudioDemo audioDemo,
 
-        List<String> tags,
+        @Size(max = 15, message = "O kit pode ter no máximo 15 tags")
+        List<@NotBlank(message = "A tag não pode ser vazia")
+        @Size(max = 30, message = "Cada tag pode ter no máximo 30 caracteres") String> tags,
 
         Map<String, String> specifications
 ) {
