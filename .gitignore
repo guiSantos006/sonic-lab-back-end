@@ -38,3 +38,11 @@ out/
 
 ### Arquivos de upload locais ###
 uploads/
+
+### Environment Variables & Secrets ###
+.env
+.env.local
+.env.*.local
+*.env
+*.key
+*.pem

@@ -16,18 +16,18 @@ public class EmailService {
     @Value("${app.frontend.url:http://localhost:3000}")
     private String frontendUrl;
 
+    @Value("${app.mail.from:SonicLab <noreply@soniclab.com>}")
+    private String senderEmail;
+
     public EmailService(JavaMailSender mailSender) {
         this.mailSender = mailSender;
     }
-
-    @Value("${spring.mail.username:noreply@soniclab.com}")
-    private String senderEmail;
 
     @Async
     public void sendPasswordResetEmail(String recipientEmail, String token) {
         try {
             SimpleMailMessage message = new SimpleMailMessage();
-            message.setFrom("SonicLab <noreply@soniclab.com>"); // Remetente obrigatório
+            message.setFrom(senderEmail);
             message.setTo(recipientEmail);
             message.setSubject("SonicLab - Recuperação de Senha");
 
