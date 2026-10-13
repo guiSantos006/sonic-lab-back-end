@@ -123,40 +123,143 @@ public class SoundKitFileProcessor {
         }
     }
 
-    private List<Float> extractWaveform(AudioInputStream stream, int points) throws IOException {
-        AudioFormat format = stream.getFormat();
-        int bytesPerFrame = format.getFrameSize();
-        if (bytesPerFrame <= 0) bytesPerFrame = 2;
+    public List<Float> extractWaveform(AudioInputStream stream, int points) throws IOException {
+        AudioFormat srcFormat = stream.getFormat();
 
-        byte[] allBytes = stream.readAllBytes();
+        // Converte para 16-bit PCM little-endian se necessário e suportado (compatível com 24-bit, 32-bit float, etc.)
+        AudioInputStream pcmStream = stream;
+        AudioFormat targetFormat = new AudioFormat(
+                AudioFormat.Encoding.PCM_SIGNED,
+                srcFormat.getSampleRate(),
+                16,
+                srcFormat.getChannels(),
+                srcFormat.getChannels() * 2,
+                srcFormat.getSampleRate(),
+                false // little-endian
+        );
+
+        if (AudioSystem.isConversionSupported(targetFormat, srcFormat)) {
+            pcmStream = AudioSystem.getAudioInputStream(targetFormat, stream);
+        }
+
+        AudioFormat format = pcmStream.getFormat();
+        int bytesPerFrame = format.getFrameSize();
+        if (bytesPerFrame <= 0) {
+            bytesPerFrame = format.getChannels() * (format.getSampleSizeInBits() / 8);
+            if (bytesPerFrame <= 0) bytesPerFrame = 2;
+        }
+
+        byte[] allBytes = pcmStream.readAllBytes();
         int totalFrames = allBytes.length / bytesPerFrame;
         if (totalFrames <= 0) return Collections.emptyList();
 
         int framesPerBucket = Math.max(1, totalFrames / points);
-        List<Float> waveform = new ArrayList<>(points);
+        int channels = Math.max(1, format.getChannels());
+        int sampleSizeInBits = format.getSampleSizeInBits();
+
+        float[] rawRms = new float[points];
+        float maxRms = 0.0f;
 
         for (int i = 0; i < points; i++) {
             int startFrame = i * framesPerBucket;
             int endFrame = Math.min(startFrame + framesPerBucket, totalFrames);
-            float maxAmplitude = 0.0f;
+            double sumSquares = 0.0;
+            int sampleCount = 0;
 
             for (int f = startFrame; f < endFrame; f++) {
-                int byteIndex = f * bytesPerFrame;
-                if (byteIndex + 1 < allBytes.length) {
-                    // Amostra de 16-bit PCM little-endian
-                    short sample = (short) ((allBytes[byteIndex + 1] << 8) | (allBytes[byteIndex] & 0xFF));
-                    float normalized = Math.abs(sample) / 32768.0f;
-                    if (normalized > maxAmplitude) {
-                        maxAmplitude = normalized;
-                    }
+                int frameOffset = f * bytesPerFrame;
+
+                for (int c = 0; c < channels; c++) {
+                    float normalized = decodeSample(allBytes, frameOffset, c, sampleSizeInBits, format);
+                    sumSquares += (double) normalized * normalized;
+                    sampleCount++;
                 }
             }
 
-            // Arredonda para 2 casas decimais
-            waveform.add(Math.round(maxAmplitude * 100.0f) / 100.0f);
+            float rms = sampleCount > 0 ? (float) Math.sqrt(sumSquares / sampleCount) : 0.0f;
+            rawRms[i] = rms;
+            if (rms > maxRms) {
+                maxRms = rms;
+            }
+        }
+
+        // Normaliza os valores de RMS entre 0.0 e 1.0 para maximizar o contraste visual dinâmico
+        List<Float> waveform = new ArrayList<>(points);
+        for (float r : rawRms) {
+            float normalized = maxRms > 0.0f ? (r / maxRms) : 0.0f;
+            waveform.add(Math.round(normalized * 100.0f) / 100.0f);
         }
 
         return waveform;
+    }
+
+    private float decodeSample(byte[] bytes, int frameOffset, int channel, int bitsPerSample, AudioFormat format) {
+        int bytesPerSample = bitsPerSample / 8;
+        if (bytesPerSample <= 0) bytesPerSample = 2;
+        int byteIndex = frameOffset + (channel * bytesPerSample);
+
+        if (byteIndex + bytesPerSample > bytes.length) {
+            return 0.0f;
+        }
+
+        boolean isBigEndian = format.isBigEndian();
+
+        switch (bitsPerSample) {
+            case 8:
+                // 8-bit PCM é unsigned no Java Sound (0..255, centro em 128)
+                int val8 = bytes[byteIndex] & 0xFF;
+                return Math.abs((val8 - 128) / 128.0f);
+
+            case 16:
+                short val16;
+                if (isBigEndian) {
+                    val16 = (short) ((bytes[byteIndex] << 8) | (bytes[byteIndex + 1] & 0xFF));
+                } else {
+                    val16 = (short) ((bytes[byteIndex + 1] << 8) | (bytes[byteIndex] & 0xFF));
+                }
+                return Math.abs(val16 / 32768.0f);
+
+            case 24:
+                int val24;
+                if (isBigEndian) {
+                    val24 = (bytes[byteIndex] << 16) | ((bytes[byteIndex + 1] & 0xFF) << 8) | (bytes[byteIndex + 2] & 0xFF);
+                } else {
+                    val24 = (bytes[byteIndex + 2] << 16) | ((bytes[byteIndex + 1] & 0xFF) << 8) | (bytes[byteIndex] & 0xFF);
+                }
+                // Extensão de sinal para 32-bit (o 24º bit é o sinal)
+                if ((val24 & 0x800000) != 0) {
+                    val24 |= 0xFF000000;
+                }
+                return Math.abs(val24 / 8388608.0f);
+
+            case 32:
+                if (format.getEncoding() == AudioFormat.Encoding.PCM_FLOAT) {
+                    int intBits;
+                    if (isBigEndian) {
+                        intBits = ((bytes[byteIndex] & 0xFF) << 24) | ((bytes[byteIndex + 1] & 0xFF) << 16) |
+                                  ((bytes[byteIndex + 2] & 0xFF) << 8) | (bytes[byteIndex + 3] & 0xFF);
+                    } else {
+                        intBits = ((bytes[byteIndex + 3] & 0xFF) << 24) | ((bytes[byteIndex + 2] & 0xFF) << 16) |
+                                  ((bytes[byteIndex + 1] & 0xFF) << 8) | (bytes[byteIndex] & 0xFF);
+                    }
+                    return Math.min(1.0f, Math.abs(Float.intBitsToFloat(intBits)));
+                } else {
+                    int val32;
+                    if (isBigEndian) {
+                        val32 = (bytes[byteIndex] << 24) | ((bytes[byteIndex + 1] & 0xFF) << 16) |
+                                ((bytes[byteIndex + 2] & 0xFF) << 8) | (bytes[byteIndex + 3] & 0xFF);
+                    } else {
+                        val32 = (bytes[byteIndex + 3] << 24) | ((bytes[byteIndex + 2] & 0xFF) << 16) |
+                                ((bytes[byteIndex + 1] & 0xFF) << 8) | (bytes[byteIndex] & 0xFF);
+                    }
+                    return Math.abs((float) (val32 / 2147483648.0));
+                }
+
+            default:
+                // Fallback para 16-bit
+                short fb = (short) ((bytes[byteIndex + 1] << 8) | (bytes[byteIndex] & 0xFF));
+                return Math.abs(fb / 32768.0f);
+        }
     }
 
     private boolean isZipFile(MultipartFile file) {
