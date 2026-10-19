@@ -32,7 +32,7 @@ public class LocalStorageService implements FileStorageService {
     }
 
     @Override
-    public String upload(String path, InputStream inputStream, String contentType) {
+    public String upload(String path, InputStream inputStream, long contentLength, String contentType) {
         try {
             Path targetLocation = this.rootLocation.resolve(path).normalize();
 
@@ -50,14 +50,22 @@ public class LocalStorageService implements FileStorageService {
         }
     }
 
-    @Override
-    public void delete(String fileUrl) {
-        try {
-            String relativePath = fileUrl.replace(this.baseUrl, "");
-            Path targetFile = this.rootLocation.resolve(relativePath).normalize();
-            Files.deleteIfExists(targetFile);
-        } catch (IOException e) {
-            throw new RuntimeException("Falha ao deletar arquivo local: " + fileUrl, e);
+   @Override
+public void delete(String fileUrl) {
+    try {
+        String relativePath = fileUrl.startsWith(this.baseUrl)
+                ? fileUrl.substring(this.baseUrl.length())
+                : fileUrl;
+        Path targetFile = this.rootLocation.resolve(relativePath).normalize();
+
+        // Proteção contra Directory Traversal
+        if (!targetFile.startsWith(this.rootLocation)) {
+            throw new SecurityException("Tentativa de exclusão fora do diretório permitido.");
         }
+
+        Files.deleteIfExists(targetFile);
+    } catch (IOException e) {
+        throw new RuntimeException("Falha ao deletar arquivo local: " + fileUrl, e);
     }
+}
 }

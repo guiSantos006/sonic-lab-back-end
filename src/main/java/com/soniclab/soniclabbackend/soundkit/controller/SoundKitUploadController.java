@@ -113,7 +113,7 @@ public class SoundKitUploadController {
         String ext = filename.contains(".") ? filename.substring(filename.lastIndexOf(".")) : ".jpg";
         String path = "soundkits/covers/" + UUID.randomUUID() + ext;
 
-        String url = storageService.upload(path, file.getInputStream(), file.getContentType());
+        String url = storageService.upload(path, file.getInputStream(), 0, file.getContentType());
         return ResponseEntity.ok(Map.of("coverUrl", url));
     }
 

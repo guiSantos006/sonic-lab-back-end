@@ -48,7 +48,7 @@ public class S3StorageService implements FileStorageService {
     }
 
     @Override
-    public String upload(String path, InputStream inputStream, long contentLength, String contentType) {
+    public  String upload(String path, InputStream inputStream, long contentLength, String contentType) {
         String key = normalizeKey(path);
 
         try {
@@ -100,4 +100,5 @@ public class S3StorageService implements FileStorageService {
     void close() {
         s3Client.close();
     }
+
 }

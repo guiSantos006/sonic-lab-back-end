@@ -60,7 +60,7 @@ public class SoundKitFileProcessor {
             String storagePath = "soundkits/packages/" + UUID.randomUUID() + ".zip";
 
             try (InputStream is = Files.newInputStream(tempZipFile)) {
-                String fileUrl = storageService.upload(storagePath, is, "application/zip");
+                String fileUrl = storageService.upload(storagePath, is, totalBytes, "application/zip");
                 return new SoundKitUploadResponse(fileUrl, totalBytes, totalSamples);
             }
 
@@ -91,9 +91,8 @@ public class SoundKitFileProcessor {
         String storagePath = "soundkits/demos/" + UUID.randomUUID() + ext;
 
         try {
-            // Salva no storage
-            String fileUrl = storageService.upload(storagePath, file.getInputStream(), file.getContentType());
-
+           // Salva no storage
+            String fileUrl = storageService.upload(storagePath, file.getInputStream(), file.getSize(), file.getContentType());
             // Analisa áudio (duração e waveform)
             Integer durationInSeconds = null;
             List<Float> waveform = Collections.emptyList();
