@@ -19,6 +19,7 @@ import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.io.IOException;
+import java.io.InputStream;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -113,8 +114,10 @@ public class SoundKitUploadController {
         String ext = filename.contains(".") ? filename.substring(filename.lastIndexOf(".")) : ".jpg";
         String path = "soundkits/covers/" + UUID.randomUUID() + ext;
 
-        String url = storageService.upload(path, file.getInputStream(), file.getContentType());
-        return ResponseEntity.ok(Map.of("coverUrl", url));
+        try (InputStream is = file.getInputStream()) {
+            String key = storageService.upload(path, is, file.getSize(), file.getContentType());
+            return ResponseEntity.ok(Map.of("coverUrl", storageService.getPublicUrl(key)));
+        }
     }
 
     /**

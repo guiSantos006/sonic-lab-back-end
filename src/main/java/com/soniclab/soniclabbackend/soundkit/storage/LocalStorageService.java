@@ -6,11 +6,17 @@ import org.springframework.stereotype.Service;
 
 import java.io.IOException;
 import java.io.InputStream;
+import java.net.URI;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardCopyOption;
+import java.time.Duration;
 
+/**
+ * Storage em disco, apenas para desenvolvimento/testes.
+ * Não há privacidade real: generateDownloadUrl devolve a mesma URL pública.
+ */
 @Service
 @ConditionalOnProperty(name = "storage.type", havingValue = "local", matchIfMissing = true)
 public class LocalStorageService implements FileStorageService {
@@ -31,33 +37,72 @@ public class LocalStorageService implements FileStorageService {
         }
     }
 
+    /** Salva o arquivo e retorna a KEY (caminho relativo), igual ao S3. */
     @Override
-    public String upload(String path, InputStream inputStream, String contentType) {
-        try {
-            Path targetLocation = this.rootLocation.resolve(path).normalize();
+    public String upload(String path, InputStream in, long contentLength, String contentType) {
+        String key = normalizeKey(path);
+        Path target = resolveSafely(key);
 
-            // Proteção contra Directory Traversal
-            if (!targetLocation.startsWith(this.rootLocation)) {
-                throw new SecurityException("Tentativa de gravação fora do diretório permitido.");
-            }
-
-            Files.createDirectories(targetLocation.getParent());
-            Files.copy(inputStream, targetLocation, StandardCopyOption.REPLACE_EXISTING);
-
-            return this.baseUrl + path.replace("\\", "/");
+        try (in) {
+            Files.createDirectories(target.getParent());
+            Files.copy(in, target, StandardCopyOption.REPLACE_EXISTING);
+            return key;
         } catch (IOException e) {
-            throw new RuntimeException("Falha ao salvar arquivo localmente: " + path, e);
+            throw new RuntimeException("Falha ao salvar arquivo localmente: " + key, e);
         }
     }
 
     @Override
-    public void delete(String fileUrl) {
+    public String getPublicUrl(String key) {
+        return baseUrl + normalizeKey(key);
+    }
+
+    /** Em teste local, o "download temporário" é só a URL pública (ttl ignorado). */
+    @Override
+    public String generateDownloadUrl(String key, Duration ttl) {
+        return getPublicUrl(key);
+    }
+
+    @Override
+    public void delete(String keyOrUrl) {
+        String key = extractKey(keyOrUrl);
         try {
-            String relativePath = fileUrl.replace(this.baseUrl, "");
-            Path targetFile = this.rootLocation.resolve(relativePath).normalize();
-            Files.deleteIfExists(targetFile);
+            Files.deleteIfExists(resolveSafely(key));
         } catch (IOException e) {
-            throw new RuntimeException("Falha ao deletar arquivo local: " + fileUrl, e);
+            throw new RuntimeException("Falha ao deletar arquivo local: " + key, e);
         }
+    }
+
+    private Path resolveSafely(String key) {
+        Path target = rootLocation.resolve(key).normalize();
+        if (!target.startsWith(rootLocation)) {
+            throw new SecurityException("Tentativa de acesso fora do diretório permitido.");
+        }
+        return target;
+    }
+
+    private String extractKey(String keyOrUrl) {
+        if (keyOrUrl.startsWith(baseUrl)) {
+            return normalizeKey(keyOrUrl.substring(baseUrl.length()));
+        }
+        if (keyOrUrl.startsWith("http://") || keyOrUrl.startsWith("https://")) {
+            return normalizeKey(URI.create(keyOrUrl).getPath());
+        }
+        return normalizeKey(keyOrUrl);
+    }
+
+    private String normalizeKey(String path) {
+        if (path == null || path.isBlank()) {
+            throw new IllegalArgumentException("O caminho do arquivo não pode ser vazio.");
+        }
+        String key = path.replace("\\", "/");
+        while (key.startsWith("/")) key = key.substring(1);
+
+        for (String segment : key.split("/")) {
+            if (segment.equals("..") || segment.equals(".")) {
+                throw new IllegalArgumentException("Caminho inválido para o storage: " + path);
+            }
+        }
+        return key;
     }
 }
