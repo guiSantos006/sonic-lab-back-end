@@ -3,19 +3,27 @@ package com.soniclab.soniclabbackend.soundkit.service;
 import com.soniclab.soniclabbackend.soundkit.dto.response.SoundKitUploadResponse;
 import com.soniclab.soniclabbackend.soundkit.entity.AudioDemo;
 import com.soniclab.soniclabbackend.soundkit.storage.FileStorageService;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
 
 import javax.sound.sampled.AudioFormat;
 import javax.sound.sampled.AudioInputStream;
 import javax.sound.sampled.AudioSystem;
-import java.io.*;
+import javax.sound.sampled.UnsupportedAudioFileException;
+import java.io.BufferedInputStream;
+import java.io.ByteArrayInputStream;
+import java.io.IOException;
+import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Set;
 import java.util.UUID;
 import java.util.zip.ZipEntry;
@@ -25,11 +33,24 @@ import java.util.zip.ZipOutputStream;
 @Service
 public class SoundKitFileProcessor {
 
-    private static final Set<String> ALLOWED_EXTENSIONS = Set.of(
+    private static final Logger log = LoggerFactory.getLogger(SoundKitFileProcessor.class);
+
+    /** Extensões permitidas dentro do pacote do kit. */
+    private static final Set<String> PACKAGE_EXTENSIONS = Set.of(
             "wav", "mp3", "aiff", "flac", "ogg", "mid", "midi", "fxp", "nki"
     );
 
+    /** Extensões permitidas para o áudio de demonstração (pré-escuta). */
+    private static final Set<String> DEMO_EXTENSIONS = Set.of(
+            "wav", "mp3", "aiff", "flac", "ogg"
+    );
+
     private static final int DEFAULT_WAVEFORM_POINTS = 100;
+
+    // Limites de proteção (ajuste conforme sua necessidade)
+    private static final long MAX_DEMO_BYTES = 100L * 1024 * 1024;               // 20 MB
+    private static final int MAX_ZIP_ENTRIES = 1_000;
+    private static final long MAX_ZIP_UNCOMPRESSED_BYTES = 2L * 1024 * 1024 * 1024; // 2 GB
 
     private final FileStorageService storageService;
 
@@ -37,8 +58,13 @@ public class SoundKitFileProcessor {
         this.storageService = storageService;
     }
 
+    // =====================================================================
+    // PACOTE (PRIVADO) — retorna a KEY, não uma URL
+    // =====================================================================
+
     /**
-     * Processa um arquivo ZIP ou lista de arquivos soltos, valida e armazena o ZIP final consolidado.
+     * Processa um ZIP ou lista de arquivos soltos, valida e armazena o ZIP final consolidado.
+     * O campo "fileUrl" do response agora contém a KEY no bucket (renomeie para fileKey no DTO).
      */
     public SoundKitUploadResponse processAndStorePackage(List<MultipartFile> files) {
         if (files == null || files.isEmpty()) {
@@ -51,17 +77,21 @@ public class SoundKitFileProcessor {
             tempZipFile = Files.createTempFile("kit-upload-", ".zip");
 
             if (files.size() == 1 && isZipFile(files.get(0))) {
-                totalSamples = inspectAndCopyZip(files.get(0), tempZipFile);
+                totalSamples = copyAndInspectZip(files.get(0), tempZipFile);
             } else {
                 totalSamples = packageFilesIntoZip(files, tempZipFile);
+            }
+
+            if (totalSamples == 0) {
+                throw new IllegalArgumentException("O pacote não contém nenhum arquivo de áudio válido.");
             }
 
             long totalBytes = Files.size(tempZipFile);
             String storagePath = "soundkits/packages/" + UUID.randomUUID() + ".zip";
 
             try (InputStream is = Files.newInputStream(tempZipFile)) {
-                String fileUrl = storageService.upload(storagePath, is, "application/zip");
-                return new SoundKitUploadResponse(fileUrl, totalBytes, totalSamples);
+                String key = storageService.upload(storagePath, is, totalBytes, "application/zip");
+                return new SoundKitUploadResponse(key, totalBytes, totalSamples);
             }
 
         } catch (IOException e) {
@@ -70,50 +100,65 @@ public class SoundKitFileProcessor {
             if (tempZipFile != null) {
                 try {
                     Files.deleteIfExists(tempZipFile);
-                } catch (IOException ignored) {
+                } catch (IOException e) {
+                    log.warn("Não foi possível remover o arquivo temporário {}", tempZipFile, e);
                 }
             }
         }
     }
 
+    // =====================================================================
+    // DEMO (PÚBLICO) — retorna URL pública, duração e waveform
+    // =====================================================================
+
     /**
-     * Processa a demonstração de áudio: salva no storage, calcula duração e extrai pontos da forma de onda.
+     * Processa a demonstração de áudio: salva no storage, calcula duração e extrai a waveform.
      */
     public AudioDemo processAudioDemo(MultipartFile file) {
         if (file == null || file.isEmpty()) {
             throw new IllegalArgumentException("Arquivo de demonstração de áudio não pode ser vazio.");
         }
+        if (file.getSize() > MAX_DEMO_BYTES) {
+            throw new IllegalArgumentException(
+                    "O áudio de demonstração excede o limite de " + (MAX_DEMO_BYTES / 1024 / 1024) + " MB.");
+        }
 
         String originalFilename = file.getOriginalFilename() != null ? file.getOriginalFilename() : "demo.wav";
-        validateExtension(originalFilename);
+        validateExtension(originalFilename, DEMO_EXTENSIONS);
 
-        String ext = originalFilename.contains(".") ? originalFilename.substring(originalFilename.lastIndexOf(".")) : ".wav";
+        String ext = originalFilename.substring(originalFilename.lastIndexOf('.')).toLowerCase(Locale.ROOT);
         String storagePath = "soundkits/demos/" + UUID.randomUUID() + ext;
+        String contentType = file.getContentType() != null ? file.getContentType() : "application/octet-stream";
 
         try {
-            // Salva no storage
-            String fileUrl = storageService.upload(storagePath, file.getInputStream(), file.getContentType());
+            // Lê uma única vez; o array serve para upload e para análise
+            byte[] audioBytes = file.getBytes();
 
-            // Analisa áudio (duração e waveform)
+            String key;
+            try (InputStream uploadStream = new ByteArrayInputStream(audioBytes)) {
+                key = storageService.upload(storagePath, uploadStream, audioBytes.length, contentType);
+            }
+            String fileUrl = storageService.getPublicUrl(key);
+
             Integer durationInSeconds = null;
             List<Float> waveform = Collections.emptyList();
 
-            try {
-                byte[] audioBytes = file.getBytes();
-                try (InputStream is = new ByteArrayInputStream(audioBytes);
-                     AudioInputStream audioInputStream = AudioSystem.getAudioInputStream(new BufferedInputStream(is))) {
+            try (AudioInputStream audioInputStream = AudioSystem.getAudioInputStream(
+                    new BufferedInputStream(new ByteArrayInputStream(audioBytes)))) {
 
-                    AudioFormat format = audioInputStream.getFormat();
-                    long frames = audioInputStream.getFrameLength();
-                    if (frames > 0 && format.getFrameRate() > 0) {
-                        durationInSeconds = (int) Math.round((double) frames / format.getFrameRate());
-                    }
-
-                    waveform = extractWaveform(audioInputStream, DEFAULT_WAVEFORM_POINTS);
+                AudioFormat format = audioInputStream.getFormat();
+                long frames = audioInputStream.getFrameLength();
+                if (frames > 0 && format.getFrameRate() > 0) {
+                    durationInSeconds = (int) Math.round((double) frames / format.getFrameRate());
                 }
-            } catch (Exception ignored) {
-                // Caso seja formato como MP3 que não possui codec nativo no Java padrão,
-                // a URL continua válida e o frontend pode fornecer ou complementar a waveform
+
+                waveform = extractWaveform(audioInputStream, DEFAULT_WAVEFORM_POINTS);
+
+            } catch (UnsupportedAudioFileException e) {
+                // Formato sem codec nativo no Java (ex.: MP3): a URL continua válida
+                log.warn("Formato de áudio sem suporte para análise: {}", originalFilename);
+            } catch (Exception e) {
+                log.warn("Falha ao analisar o áudio da demo {}", originalFilename, e);
             }
 
             return new AudioDemo(fileUrl, durationInSeconds, waveform);
@@ -123,10 +168,14 @@ public class SoundKitFileProcessor {
         }
     }
 
+    // =====================================================================
+    // WAVEFORM
+    // =====================================================================
+
     public List<Float> extractWaveform(AudioInputStream stream, int points) throws IOException {
         AudioFormat srcFormat = stream.getFormat();
 
-        // Converte para 16-bit PCM little-endian se necessário e suportado (compatível com 24-bit, 32-bit float, etc.)
+        // Converte para 16-bit PCM little-endian quando possível
         AudioInputStream pcmStream = stream;
         AudioFormat targetFormat = new AudioFormat(
                 AudioFormat.Encoding.PCM_SIGNED,
@@ -183,7 +232,7 @@ public class SoundKitFileProcessor {
             }
         }
 
-        // Normaliza os valores de RMS entre 0.0 e 1.0 para maximizar o contraste visual dinâmico
+        // Normaliza entre 0.0 e 1.0 para maximizar o contraste visual
         List<Float> waveform = new ArrayList<>(points);
         for (float r : rawRms) {
             float normalized = maxRms > 0.0f ? (r / maxRms) : 0.0f;
@@ -226,7 +275,7 @@ public class SoundKitFileProcessor {
                 } else {
                     val24 = (bytes[byteIndex + 2] << 16) | ((bytes[byteIndex + 1] & 0xFF) << 8) | (bytes[byteIndex] & 0xFF);
                 }
-                // Extensão de sinal para 32-bit (o 24º bit é o sinal)
+                // Extensão de sinal para 32-bit
                 if ((val24 & 0x800000) != 0) {
                     val24 |= 0xFF000000;
                 }
@@ -237,10 +286,10 @@ public class SoundKitFileProcessor {
                     int intBits;
                     if (isBigEndian) {
                         intBits = ((bytes[byteIndex] & 0xFF) << 24) | ((bytes[byteIndex + 1] & 0xFF) << 16) |
-                                  ((bytes[byteIndex + 2] & 0xFF) << 8) | (bytes[byteIndex + 3] & 0xFF);
+                                ((bytes[byteIndex + 2] & 0xFF) << 8) | (bytes[byteIndex + 3] & 0xFF);
                     } else {
                         intBits = ((bytes[byteIndex + 3] & 0xFF) << 24) | ((bytes[byteIndex + 2] & 0xFF) << 16) |
-                                  ((bytes[byteIndex + 1] & 0xFF) << 8) | (bytes[byteIndex] & 0xFF);
+                                ((bytes[byteIndex + 1] & 0xFF) << 8) | (bytes[byteIndex] & 0xFF);
                     }
                     return Math.min(1.0f, Math.abs(Float.intBitsToFloat(intBits)));
                 } else {
@@ -256,34 +305,71 @@ public class SoundKitFileProcessor {
                 }
 
             default:
-                // Fallback para 16-bit
+                // Fallback para 16-bit little-endian
                 short fb = (short) ((bytes[byteIndex + 1] << 8) | (bytes[byteIndex] & 0xFF));
                 return Math.abs(fb / 32768.0f);
         }
     }
 
+    // =====================================================================
+    // ZIP
+    // =====================================================================
+
     private boolean isZipFile(MultipartFile file) {
         String name = file.getOriginalFilename();
-        return name != null && name.toLowerCase().endsWith(".zip");
+        return name != null && name.toLowerCase(Locale.ROOT).endsWith(".zip");
     }
 
-    private int inspectAndCopyZip(MultipartFile sourceZip, Path destination) throws IOException {
+    /**
+     * Copia o ZIP enviado para o arquivo temporário e então inspeciona a cópia,
+     * validando nomes das entradas (zip slip), extensões e limites (zip bomb).
+     */
+    private int copyAndInspectZip(MultipartFile sourceZip, Path destination) throws IOException {
+        try (InputStream in = sourceZip.getInputStream()) {
+            Files.copy(in, destination, StandardCopyOption.REPLACE_EXISTING);
+        }
+
         int count = 0;
-        try (ZipInputStream zis = new ZipInputStream(sourceZip.getInputStream())) {
+        int entries = 0;
+        long totalUncompressed = 0;
+        byte[] buffer = new byte[8192];
+
+        try (ZipInputStream zis = new ZipInputStream(Files.newInputStream(destination))) {
             ZipEntry entry;
             while ((entry = zis.getNextEntry()) != null) {
-                if (!entry.isDirectory()) {
-                    validateExtension(entry.getName());
-                    count++;
+                if (++entries > MAX_ZIP_ENTRIES) {
+                    throw new IllegalArgumentException(
+                            "O ZIP excede o limite de " + MAX_ZIP_ENTRIES + " entradas.");
                 }
+
+                String name = entry.getName();
+                validateEntryName(name);
+
+                if (entry.isDirectory() || isIgnorableEntry(name)) {
+                    continue;
+                }
+
+                validateExtension(name, PACKAGE_EXTENSIONS);
+
+                // Conta os bytes realmente descompactados (o tamanho do header pode ser falso)
+                int read;
+                while ((read = zis.read(buffer)) != -1) {
+                    totalUncompressed += read;
+                    if (totalUncompressed > MAX_ZIP_UNCOMPRESSED_BYTES) {
+                        throw new IllegalArgumentException(
+                                "O conteúdo descompactado do ZIP excede o limite permitido.");
+                    }
+                }
+                count++;
             }
         }
-        Files.copy(sourceZip.getInputStream(), destination, StandardCopyOption.REPLACE_EXISTING);
         return count;
     }
 
     private int packageFilesIntoZip(List<MultipartFile> files, Path targetZip) throws IOException {
         int count = 0;
+        Set<String> usedNames = new HashSet<>();
+
         try (ZipOutputStream zos = new ZipOutputStream(Files.newOutputStream(targetZip))) {
             for (MultipartFile file : files) {
                 String filename = file.getOriginalFilename();
@@ -291,11 +377,24 @@ public class SoundKitFileProcessor {
                     continue;
                 }
 
-                validateExtension(filename);
+                // Mantém só o nome base (remove qualquer caminho enviado pelo cliente)
+                String baseName = filename.replace("\\", "/");
+                baseName = baseName.substring(baseName.lastIndexOf('/') + 1);
 
-                ZipEntry entry = new ZipEntry(filename);
-                zos.putNextEntry(entry);
-                file.getInputStream().transferTo(zos);
+                validateExtension(baseName, PACKAGE_EXTENSIONS);
+
+                // Evita ZipException por nomes duplicados
+                String entryName = baseName;
+                int suffix = 1;
+                while (!usedNames.add(entryName)) {
+                    int dot = baseName.lastIndexOf('.');
+                    entryName = baseName.substring(0, dot) + "-" + suffix++ + baseName.substring(dot);
+                }
+
+                zos.putNextEntry(new ZipEntry(entryName));
+                try (InputStream in = file.getInputStream()) {
+                    in.transferTo(zos);
+                }
                 zos.closeEntry();
                 count++;
             }
@@ -303,13 +402,36 @@ public class SoundKitFileProcessor {
         return count;
     }
 
-    private void validateExtension(String filename) {
+    /** Rejeita caminhos absolutos e segmentos ".." (zip slip). */
+    private void validateEntryName(String name) {
+        String normalized = name.replace("\\", "/");
+        if (normalized.startsWith("/") || normalized.matches("^[A-Za-z]:.*")) {
+            throw new IllegalArgumentException("Caminho absoluto não permitido no ZIP: " + name);
+        }
+        for (String segment : normalized.split("/")) {
+            if (segment.equals("..")) {
+                throw new IllegalArgumentException("Caminho inválido no ZIP: " + name);
+            }
+        }
+    }
+
+    /** Metadados que macOS/Windows adicionam automaticamente e que não são samples. */
+    private boolean isIgnorableEntry(String name) {
+        String normalized = name.replace("\\", "/");
+        String base = normalized.substring(normalized.lastIndexOf('/') + 1);
+        return normalized.startsWith("__MACOSX/")
+                || base.equals(".DS_Store")
+                || base.equals("Thumbs.db")
+                || base.startsWith("._");
+    }
+
+    private void validateExtension(String filename, Set<String> allowed) {
         int lastDot = filename.lastIndexOf('.');
         if (lastDot == -1) {
             throw new IllegalArgumentException("Arquivo sem extensão não permitido: " + filename);
         }
-        String ext = filename.substring(lastDot + 1).toLowerCase();
-        if (!ALLOWED_EXTENSIONS.contains(ext)) {
+        String ext = filename.substring(lastDot + 1).toLowerCase(Locale.ROOT);
+        if (!allowed.contains(ext)) {
             throw new IllegalArgumentException("Extensão não permitida (" + ext + ") no arquivo: " + filename);
         }
     }
