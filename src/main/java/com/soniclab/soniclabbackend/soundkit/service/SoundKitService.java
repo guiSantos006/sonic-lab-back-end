@@ -4,10 +4,12 @@ import com.soniclab.soniclabbackend.soundkit.dto.request.CreateSoundKitRequest;
 import com.soniclab.soniclabbackend.soundkit.dto.request.SoundKitFilterParams;
 import com.soniclab.soniclabbackend.soundkit.dto.response.PageResponse;
 import com.soniclab.soniclabbackend.soundkit.dto.response.SoundKitResponse;
+import com.soniclab.soniclabbackend.soundkit.dto.request.UpdateSoundKitRequest;
 import com.soniclab.soniclabbackend.soundkit.entity.SoundKit;
 import com.soniclab.soniclabbackend.soundkit.entity.SoundKitId;
 import com.soniclab.soniclabbackend.soundkit.exception.SoundKitNotFoundException;
 import com.soniclab.soniclabbackend.soundkit.repository.SoundKitRepository;
+
 import com.soniclab.soniclabbackend.user.config.JWTUserData;
 import com.soniclab.soniclabbackend.user.entity.UserRole;
 import org.springframework.data.domain.Page;
@@ -87,6 +89,29 @@ public class SoundKitService {
         if (request.specifications() != null) {
             soundKit.setSpecifications(request.specifications());
         }
+
+        SoundKit saved = soundKitRepository.save(soundKit);
+        return SoundKitResponse.fromEntity(saved);
+    }
+
+    @Transactional
+    public SoundKitResponse update(UUID id, UpdateSoundKitRequest request, JWTUserData user) {
+        SoundKit soundKit = soundKitRepository.findByIdAndActiveTrue(new SoundKitId(id))
+                .orElseThrow(() -> new SoundKitNotFoundException("SoundKit não encontrado: " + id));
+
+        //  somente o dono do kit pode edita
+        if (!soundKit.getCreatorId().equals(user.userId())) {
+            throw new AccessDeniedException("Você não tem permissão para editar esse SoundKit");
+        }
+
+        soundKit.updateDetails(
+                request.title(),
+                request.description(),
+                request.price(),
+                request.type(),
+                request.tags(),
+                request.specifications()
+        );
 
         SoundKit saved = soundKitRepository.save(soundKit);
         return SoundKitResponse.fromEntity(saved);

@@ -2,6 +2,7 @@ package com.soniclab.soniclabbackend.soundkit.controller;
 
 import com.soniclab.soniclabbackend.soundkit.dto.request.CreateSoundKitRequest;
 import com.soniclab.soniclabbackend.soundkit.dto.request.SoundKitFilterParams;
+import com.soniclab.soniclabbackend.soundkit.dto.request.UpdateSoundKitRequest;
 import com.soniclab.soniclabbackend.soundkit.dto.response.PageResponse;
 import com.soniclab.soniclabbackend.soundkit.dto.response.SoundKitResponse;
 import com.soniclab.soniclabbackend.soundkit.service.SoundKitService;
@@ -187,6 +188,21 @@ public class SoundKitController {
             @ParameterObject @PageableDefault(size = 20, sort = "createdAt", direction = Sort.Direction.DESC) Pageable pageable
     ) {
         return ResponseEntity.ok(soundKitService.listByCreator(user, pageable));
+    }
+
+    @PutMapping("/{id}")
+    @Operation(
+            summary = "Editar os dados textuais de um SoundKit",
+            description = "Atualiza título, descrição, preço, tipo e tags. " +
+                    "Não altera arquivos. Apenas o dono do kit pode editá-lo.",
+            security = @SecurityRequirement(name = "bearerAuth")
+    )
+    public ResponseEntity<SoundKitResponse> update(
+            @PathVariable UUID id,
+            @Valid @RequestBody UpdateSoundKitRequest request,
+            @Parameter(hidden = true) @AuthenticationPrincipal JWTUserData user
+    ) {
+        return ResponseEntity.ok(soundKitService.update(id, request, user));
     }
 
     @DeleteMapping("/{id}")
