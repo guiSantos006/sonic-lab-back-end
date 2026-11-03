@@ -73,5 +73,35 @@ public class SoundKit {
         this.active = true;
         this.createdAt = Instant.now();
         this.updatedAt = Instant.now();
+
+
+    }
+    /**
+     * Atualiza apenas os dados descritivos do kit (nunca arquivos).
+     * Tags e specifications nulas mantêm o valor atual.
+     */
+      public void updateDetails(String title, String description, BigDecimal price, KitType type,
+                              List<String> tags, Map<String, String> specifications) {
+        if (title == null || title.isBlank()) {
+            throw new IllegalArgumentException("Título é obrigatório");
+        }
+        if (price == null || price.compareTo(BigDecimal.ZERO) < 0) {
+            throw new IllegalArgumentException("Preço inválido");
+        }
+        if (type == null) {
+            throw new IllegalArgumentException("Tipo do kit é obrigatório");
+        }
+
+        this.title = title.trim();
+        this.description = description;
+        this.price = price;
+        this.type = type;
+
+        if (tags != null) {
+            this.tags = new ArrayList<>(tags);
+        }
+        if (specifications != null) {
+            this.specifications = new HashMap<>(specifications);
+        }
     }
 }
