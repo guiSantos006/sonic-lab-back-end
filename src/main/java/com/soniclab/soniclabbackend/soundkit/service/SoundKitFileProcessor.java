@@ -3,6 +3,7 @@ package com.soniclab.soniclabbackend.soundkit.service;
 import com.soniclab.soniclabbackend.soundkit.dto.response.SoundKitUploadResponse;
 import com.soniclab.soniclabbackend.soundkit.entity.AudioDemo;
 import com.soniclab.soniclabbackend.soundkit.storage.FileStorageService;
+import com.soniclab.soniclabbackend.soundkit.storage.FileVisibility;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -90,7 +91,7 @@ public class SoundKitFileProcessor {
             String storagePath = "soundkits/packages/" + UUID.randomUUID() + ".zip";
 
             try (InputStream is = Files.newInputStream(tempZipFile)) {
-                String key = storageService.upload(storagePath, is, totalBytes, "application/zip");
+                String key = storageService.upload(storagePath, is, totalBytes, "application/zip", FileVisibility.PRIVATE);
                 return new SoundKitUploadResponse(key, totalBytes, totalSamples);
             }
 
@@ -136,7 +137,7 @@ public class SoundKitFileProcessor {
 
             String key;
             try (InputStream uploadStream = new ByteArrayInputStream(audioBytes)) {
-                key = storageService.upload(storagePath, uploadStream, audioBytes.length, contentType);
+                key = storageService.upload(storagePath, uploadStream, audioBytes.length, contentType, FileVisibility.PUBLIC);
             }
             String fileUrl = storageService.getPublicUrl(key);
 

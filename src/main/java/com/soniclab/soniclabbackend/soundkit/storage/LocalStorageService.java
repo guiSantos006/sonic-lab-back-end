@@ -37,14 +37,19 @@ public class LocalStorageService implements FileStorageService {
         }
     }
 
-    /** Salva o arquivo e retorna a KEY (caminho relativo), igual ao S3. */
     @Override
-    public String upload(String path, InputStream in, long contentLength, String contentType) {
+    public String upload(String path, InputStream in, long contentLength, String contentType, FileVisibility visibility) {
+        if (in == null) {
+            throw new IllegalArgumentException("O fluxo de dados (InputStream) não pode ser nulo.");
+        }
         String key = normalizeKey(path);
         Path target = resolveSafely(key);
 
         try (in) {
-            Files.createDirectories(target.getParent());
+            Path parent = target.getParent();
+            if (parent != null) {
+                Files.createDirectories(parent);
+            }
             Files.copy(in, target, StandardCopyOption.REPLACE_EXISTING);
             return key;
         } catch (IOException e) {
@@ -53,11 +58,21 @@ public class LocalStorageService implements FileStorageService {
     }
 
     @Override
+    public String upload(String path, InputStream in, long contentLength, String contentType) {
+        return upload(path, in, contentLength, contentType, inferVisibility(path));
+    }
+
+    @Override
     public String getPublicUrl(String key) {
         return baseUrl + normalizeKey(key);
     }
 
     /** Em teste local, o "download temporário" é só a URL pública (ttl ignorado). */
+    @Override
+    public String generateDownloadUrl(String key) {
+        return getPublicUrl(key);
+    }
+
     @Override
     public String generateDownloadUrl(String key, Duration ttl) {
         return getPublicUrl(key);
@@ -73,6 +88,32 @@ public class LocalStorageService implements FileStorageService {
         }
     }
 
+    @Override
+    public boolean exists(String keyOrUrl) {
+        if (keyOrUrl == null || keyOrUrl.isBlank()) {
+            return false;
+        }
+        try {
+            String key = extractKey(keyOrUrl);
+            return Files.exists(resolveSafely(key));
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    @Override
+    public boolean isPublic(String keyOrUrl) {
+        if (keyOrUrl == null || keyOrUrl.isBlank()) {
+            return false;
+        }
+        try {
+            String key = extractKey(keyOrUrl);
+            return inferVisibility(key) == FileVisibility.PUBLIC;
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
     private Path resolveSafely(String key) {
         Path target = rootLocation.resolve(key).normalize();
         if (!target.startsWith(rootLocation)) {
@@ -82,21 +123,32 @@ public class LocalStorageService implements FileStorageService {
     }
 
     private String extractKey(String keyOrUrl) {
-        if (keyOrUrl.startsWith(baseUrl)) {
-            return normalizeKey(keyOrUrl.substring(baseUrl.length()));
+        if (keyOrUrl == null || keyOrUrl.isBlank()) {
+            throw new IllegalArgumentException("O caminho do arquivo não pode ser vazio.");
         }
-        if (keyOrUrl.startsWith("http://") || keyOrUrl.startsWith("https://")) {
-            return normalizeKey(URI.create(keyOrUrl).getPath());
+        String trimmed = keyOrUrl.trim();
+        int queryIndex = trimmed.indexOf('?');
+        String urlWithoutQuery = queryIndex >= 0 ? trimmed.substring(0, queryIndex) : trimmed;
+
+        if (urlWithoutQuery.startsWith(baseUrl)) {
+            return normalizeKey(urlWithoutQuery.substring(baseUrl.length()));
         }
-        return normalizeKey(keyOrUrl);
+        if (urlWithoutQuery.startsWith("http://") || urlWithoutQuery.startsWith("https://")) {
+            return normalizeKey(URI.create(urlWithoutQuery).getPath());
+        }
+        return normalizeKey(urlWithoutQuery);
     }
 
     private String normalizeKey(String path) {
         if (path == null || path.isBlank()) {
             throw new IllegalArgumentException("O caminho do arquivo não pode ser vazio.");
         }
+        if (path.contains("\0")) {
+            throw new IllegalArgumentException("Caminho contém caracteres nulos inválidos: " + path);
+        }
         String key = path.replace("\\", "/");
         while (key.startsWith("/")) key = key.substring(1);
+        key = key.replaceAll("/+", "/");
 
         for (String segment : key.split("/")) {
             if (segment.equals("..") || segment.equals(".")) {
