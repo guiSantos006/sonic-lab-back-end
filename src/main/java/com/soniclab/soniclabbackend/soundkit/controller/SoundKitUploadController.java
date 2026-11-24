@@ -4,6 +4,7 @@ import com.soniclab.soniclabbackend.soundkit.dto.response.SoundKitUploadResponse
 import com.soniclab.soniclabbackend.soundkit.entity.AudioDemo;
 import com.soniclab.soniclabbackend.soundkit.service.SoundKitFileProcessor;
 import com.soniclab.soniclabbackend.soundkit.storage.FileStorageService;
+import com.soniclab.soniclabbackend.soundkit.storage.FileVisibility;
 import com.soniclab.soniclabbackend.user.exception.ApiErrorResponse;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
@@ -115,7 +116,7 @@ public class SoundKitUploadController {
         String path = "soundkits/covers/" + UUID.randomUUID() + ext;
 
         try (InputStream is = file.getInputStream()) {
-            String key = storageService.upload(path, is, file.getSize(), file.getContentType());
+            String key = storageService.upload(path, is, file.getSize(), file.getContentType(), FileVisibility.PUBLIC);
             return ResponseEntity.ok(Map.of("coverUrl", storageService.getPublicUrl(key)));
         }
     }

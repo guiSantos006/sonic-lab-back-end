@@ -1,9 +1,13 @@
 package com.soniclab.soniclabbackend.soundkit.service;
 
+import com.soniclab.soniclabbackend.soundkit.entity.AudioDemo;
 import com.soniclab.soniclabbackend.soundkit.storage.FileStorageService;
+import com.soniclab.soniclabbackend.soundkit.storage.FileVisibility;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.mockito.Mockito;
+import org.springframework.mock.web.MockMultipartFile;
 
 import javax.sound.sampled.AudioFormat;
 import javax.sound.sampled.AudioInputStream;
@@ -11,43 +15,136 @@ import javax.sound.sampled.AudioSystem;
 import java.io.ByteArrayInputStream;
 import java.io.File;
 import java.io.InputStream;
+import java.nio.file.Files;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 public class SoundKitFileProcessorTest {
 
     private SoundKitFileProcessor fileProcessor;
+    private FileStorageService storageService;
 
     @BeforeEach
     void setUp() {
-        FileStorageService storageService = Mockito.mock(FileStorageService.class);
+        storageService = Mockito.mock(FileStorageService.class);
+        when(storageService.upload(anyString(), any(InputStream.class), anyLong(), anyString(), any(FileVisibility.class)))
+                .thenReturn("soundkits/demos/test-demo-key.mp3");
+        when(storageService.getPublicUrl(anyString()))
+                .thenReturn("https://bucket.s3.us-east-2.amazonaws.com/soundkits/demos/test-demo-key.mp3");
+
         fileProcessor = new SoundKitFileProcessor(storageService);
     }
 
     @Test
-    void testExtractWaveformWith24BitAudioDemo() throws Exception {
-        File file = new File("uploads/soundkits/demos/fa56217c-0084-409f-8825-b2135f673735.wav");
-        if (!file.exists()) {
-            return;
+    @DisplayName("Deve extrair waveform real de 100 pontos normalizados de um arquivo MP3 real de teste")
+    void testExtractWaveformFromRealMp3() throws Exception {
+        File mp3File = new File("src/test/resources/test-audio.mp3");
+        assertTrue(mp3File.exists(), "O arquivo MP3 de teste deve existir em src/test/resources/test-audio.mp3");
+
+        byte[] mp3Bytes = Files.readAllBytes(mp3File.toPath());
+
+        SoundKitFileProcessor.AudioAnalysisResult result = fileProcessor.analyzeMp3(mp3Bytes);
+
+        assertNotNull(result);
+        assertNotNull(result.durationInSeconds());
+        assertTrue(result.durationInSeconds() > 0, "Duração do MP3 deve ser maior que 0");
+
+        List<Float> waveform = result.waveform();
+        assertNotNull(waveform);
+        assertEquals(SoundKitFileProcessor.DEFAULT_WAVEFORM_POINTS, waveform.size(), "Deve conter exatamente 100 pontos");
+
+        // Todos os pontos devem estar estritamente normalizados entre 0.0 e 1.0
+        for (float val : waveform) {
+            assertTrue(val >= 0.0f && val <= 1.0f, "Valor da waveform fora do intervalo [0, 1]: " + val);
         }
 
-        try (AudioInputStream ais = AudioSystem.getAudioInputStream(file)) {
-            List<Float> waveform = fileProcessor.extractWaveform(ais, 100);
+        // Deve haver pico máximo atingindo 1.0 e variação dinâmica (não todos iguais)
+        float max = waveform.stream().max(Float::compareTo).orElse(0.0f);
+        float min = waveform.stream().min(Float::compareTo).orElse(0.0f);
+        assertEquals(1.0f, max, 0.01f, "Pelo menos um ponto do waveform deve atingir o pico normalizado 1.0");
+        assertTrue(max > min, "Deve haver contraste dinâmico real entre os pontos do MP3");
+    }
 
-            assertNotNull(waveform);
-            assertEquals(100, waveform.size());
+    @Test
+    @DisplayName("Deve extrair waveform de 100 pontos e calcular duração de arquivo WAV real")
+    void testExtractWaveformFromRealWav() throws Exception {
+        File wavFile = new File("src/test/resources/test-audio.wav");
+        assertTrue(wavFile.exists(), "O arquivo WAV de teste deve existir em src/test/resources/test-audio.wav");
 
-            // Verifica que NÃO são todos 1.0 (o problema reportado pelo usuário)
-            long countOnes = waveform.stream().filter(v -> v == 1.0f).count();
-            assertTrue(countOnes < 10, "A waveform não deve estar saturada em 1.0 (encontrado: " + countOnes + " vezes 1.0)");
+        byte[] wavBytes = Files.readAllBytes(wavFile.toPath());
 
-            // Verifica que há variação dinâmica real
-            float min = waveform.stream().min(Float::compareTo).orElse(0.0f);
-            float max = waveform.stream().max(Float::compareTo).orElse(0.0f);
-            assertTrue(max > min, "Deve haver variação dinâmica na forma de onda");
-            assertTrue(max >= 0.8f, "O ponto mais alto deve atingir nível audível");
+        SoundKitFileProcessor.AudioAnalysisResult result = fileProcessor.analyzeViaAudioSystem(wavBytes);
+
+        assertNotNull(result);
+        assertNotNull(result.durationInSeconds());
+        assertEquals(2, result.durationInSeconds(), "Duração do WAV de teste sintético deve ser de 2 segundos");
+
+        List<Float> waveform = result.waveform();
+        assertNotNull(waveform);
+        assertEquals(SoundKitFileProcessor.DEFAULT_WAVEFORM_POINTS, waveform.size(), "Deve conter exatamente 100 pontos");
+
+        for (float val : waveform) {
+            assertTrue(val >= 0.0f && val <= 1.0f, "Valor da waveform fora de [0, 1]: " + val);
         }
+
+        float max = waveform.stream().max(Float::compareTo).orElse(0.0f);
+        assertEquals(1.0f, max, 0.01f, "Pico normalizado deve ser 1.0");
+    }
+
+    @Test
+    @DisplayName("Deve processar AudioDemo completo via processAudioDemo garantindo que stream não seja consumido/invalidado")
+    void testProcessAudioDemoWithMp3MultipartFile() throws Exception {
+        File mp3File = new File("src/test/resources/test-audio.mp3");
+        byte[] mp3Bytes = Files.readAllBytes(mp3File.toPath());
+
+        MockMultipartFile multipartFile = new MockMultipartFile(
+                "file",
+                "You.mp3",
+                "audio/mpeg",
+                mp3Bytes
+        );
+
+        AudioDemo demo = fileProcessor.processAudioDemo(multipartFile);
+
+        assertNotNull(demo);
+        assertNotNull(demo.url());
+        assertEquals("https://bucket.s3.us-east-2.amazonaws.com/soundkits/demos/test-demo-key.mp3", demo.url());
+        assertNotNull(demo.durationInSeconds());
+        assertTrue(demo.durationInSeconds() > 0);
+        assertNotNull(demo.waveformData());
+        assertEquals(100, demo.waveformData().size());
+        assertFalse(demo.waveformData().isEmpty(), "waveformData NÃO pode permanecer vazia para MP3");
+
+        // Verifica que o storage recebeu upload com visibilidade PUBLIC
+        verify(storageService).upload(
+                anyString(),
+                any(InputStream.class),
+                eq((long) mp3Bytes.length),
+                eq("audio/mpeg"),
+                eq(FileVisibility.PUBLIC)
+        );
+    }
+
+    @Test
+    @DisplayName("Deve tratar formato não suportado ou corrompido sem quebrar a aplicação")
+    void testUnsupportedAudioFileHandling() {
+        byte[] invalidAudioBytes = "ISTO_NAO_E_UM_AUDIO_VALIDO".getBytes();
+
+        SoundKitFileProcessor.AudioAnalysisResult result = fileProcessor.analyzeAudio(
+                invalidAudioBytes,
+                "corrompido.mp3",
+                ".mp3"
+        );
+
+        assertNotNull(result);
+        assertTrue(result.waveform().isEmpty(), "Waveform deve ser vazia para arquivo inválido");
     }
 
     @Test

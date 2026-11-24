@@ -4,6 +4,7 @@ import com.soniclab.soniclabbackend.soundkit.dto.request.CreateSoundKitRequest;
 import com.soniclab.soniclabbackend.soundkit.dto.request.SoundKitFilterParams;
 import com.soniclab.soniclabbackend.soundkit.dto.request.UpdateSoundKitRequest;
 import com.soniclab.soniclabbackend.soundkit.dto.response.PageResponse;
+import com.soniclab.soniclabbackend.soundkit.dto.response.SoundKitDownloadResponse;
 import com.soniclab.soniclabbackend.soundkit.dto.response.SoundKitResponse;
 import com.soniclab.soniclabbackend.soundkit.service.SoundKitService;
 import com.soniclab.soniclabbackend.user.config.JWTUserData;
@@ -245,5 +246,41 @@ public class SoundKitController {
     ) {
         soundKitService.deactivate(id, user);
         return ResponseEntity.noContent().build();
+    }
+
+    @GetMapping("/{id}/download")
+    @Operation(
+            summary = "Gerar link temporário para download do pacote do SoundKit",
+            description = "Gera sob demanda uma URL pré-assinada (Presigned URL) para download do pacote de arquivos privado. " +
+                    "Requer autenticação JWT. A URL possui validade temporária e nunca é persistida no banco.",
+            security = @SecurityRequirement(name = "bearerAuth")
+    )
+    @ApiResponses(value = {
+            @ApiResponse(
+                    responseCode = "200",
+                    description = "URL pré-assinada gerada com sucesso",
+                    content = @Content(mediaType = "application/json", schema = @Schema(implementation = SoundKitDownloadResponse.class))
+            ),
+            @ApiResponse(
+                    responseCode = "401",
+                    description = "Usuário não autenticado",
+                    content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiErrorResponse.class))
+            ),
+            @ApiResponse(
+                    responseCode = "404",
+                    description = "SoundKit não encontrado ou inativo",
+                    content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiErrorResponse.class))
+            )
+    })
+    public ResponseEntity<SoundKitDownloadResponse> getDownloadUrl(
+            @Parameter(
+                    description = "Identificador único (UUID) do SoundKit",
+                    example = "a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d",
+                    required = true
+            )
+            @PathVariable UUID id,
+            @Parameter(hidden = true) @AuthenticationPrincipal JWTUserData user
+    ) {
+        return ResponseEntity.ok(soundKitService.getDownloadUrl(id, user));
     }
 }
