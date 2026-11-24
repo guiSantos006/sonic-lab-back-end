@@ -2,6 +2,7 @@ package com.soniclab.soniclabbackend.soundkit.service;
 
 import com.soniclab.soniclabbackend.soundkit.dto.request.CreateSoundKitRequest;
 import com.soniclab.soniclabbackend.soundkit.dto.request.UpdateSoundKitRequest;
+import com.soniclab.soniclabbackend.soundkit.dto.response.SoundKitDownloadResponse;
 import com.soniclab.soniclabbackend.soundkit.dto.response.SoundKitResponse;
 import com.soniclab.soniclabbackend.soundkit.entity.AudioDemo;
 import com.soniclab.soniclabbackend.soundkit.entity.KitType;
@@ -9,10 +10,12 @@ import com.soniclab.soniclabbackend.soundkit.entity.SoundKit;
 import com.soniclab.soniclabbackend.soundkit.entity.SoundKitId;
 import com.soniclab.soniclabbackend.soundkit.exception.SoundKitNotFoundException;
 import com.soniclab.soniclabbackend.soundkit.repository.SoundKitRepository;
+import com.soniclab.soniclabbackend.soundkit.storage.FileStorageService;
 import com.soniclab.soniclabbackend.user.config.JWTUserData;
 import com.soniclab.soniclabbackend.user.entity.UserId;
 import com.soniclab.soniclabbackend.user.entity.UserRole;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mockito;
@@ -36,17 +39,19 @@ class SoundKitServiceTest {
 
     private SoundKitRepository soundKitRepository;
     private MongoTemplate mongoTemplate;
+    private FileStorageService storageService;
     private SoundKitService soundKitService;
 
     @BeforeEach
     void setUp() {
         soundKitRepository = Mockito.mock(SoundKitRepository.class);
         mongoTemplate = Mockito.mock(MongoTemplate.class);
-        soundKitService = new SoundKitService(soundKitRepository, mongoTemplate);
+        storageService = Mockito.mock(FileStorageService.class);
+        soundKitService = new SoundKitService(soundKitRepository, mongoTemplate, storageService);
     }
 
     // ------------------------------------------------------------------
-    // create (teste que já existia)
+    // create
     // ------------------------------------------------------------------
     @Test
     void testCreateSoundKitPreservesAudioDemoWithWaveformAndDuration() {
@@ -91,6 +96,85 @@ class SoundKitServiceTest {
         assertEquals(demo, captured.getAudioDemo());
         assertEquals(218, captured.getAudioDemo().durationInSeconds());
         assertEquals(demo.waveformData(), captured.getAudioDemo().waveformData());
+        assertEquals("soundkits/packages/package.zip", captured.getFileUrl());
+    }
+
+    @Test
+    @DisplayName("Deve normalizar URL de localhost para chave persistente pura ao cadastrar SoundKit")
+    void testCreateSoundKitNormalizesLocalhostFileUrlToStorageKey() {
+        UserId userId = new UserId();
+        JWTUserData user = new JWTUserData(userId, "producer@soniclab.com", UserRole.USER);
+
+        AudioDemo demo = new AudioDemo(
+                "https://bucket.s3.us-east-2.amazonaws.com/soundkits/demos/demo.mp3",
+                30,
+                List.of(0.1f, 0.5f, 0.9f)
+        );
+
+        CreateSoundKitRequest requestWithLocalhost = new CreateSoundKitRequest(
+                "Trap King 2026",
+                "Descrição",
+                new BigDecimal("29.90"),
+                KitType.SAMPLE_PACK,
+                "https://bucket.s3.us-east-2.amazonaws.com/soundkits/covers/cover.jpg",
+                "http://localhost:8080/soundkits/packages/27bda7bf-16c5-4810-907c-2a9428fdad83.zip",
+                demo,
+                List.of("TRAP"),
+                Map.of()
+        );
+
+        when(soundKitRepository.save(any(SoundKit.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        soundKitService.create(requestWithLocalhost, user);
+
+        ArgumentCaptor<SoundKit> captor = ArgumentCaptor.forClass(SoundKit.class);
+        verify(soundKitRepository).save(captor.capture());
+
+        SoundKit captured = captor.getValue();
+        // Garante que o valor persistido NUNCA é localhost, e sim a storage key estável
+        assertEquals("soundkits/packages/27bda7bf-16c5-4810-907c-2a9428fdad83.zip", captured.getFileUrl());
+    }
+
+    // ------------------------------------------------------------------
+    // getDownloadUrl (download autenticado com presigned URL)
+    // ------------------------------------------------------------------
+    @Test
+    @DisplayName("Deve gerar URL temporária sob demanda e lidar com compatibilidade de registros legados com localhost")
+    void testGetDownloadUrlWithLegacyLocalhostRecord() {
+        UserId owner = new UserId();
+        JWTUserData user = new JWTUserData(owner, "buyer@soniclab.com", UserRole.USER);
+        SoundKit kit = existingKit(owner);
+        // Simula registro legado já persistido no MongoDB com localhost
+        kit.setFileUrl("http://localhost:8080/soundkits/packages/27bda7bf-16c5-4810-907c-2a9428fdad83.zip");
+        UUID id = kit.getId().uuid();
+
+        when(soundKitRepository.findByIdAndActiveTrue(new SoundKitId(id))).thenReturn(Optional.of(kit));
+        when(storageService.generateDownloadUrl("soundkits/packages/27bda7bf-16c5-4810-907c-2a9428fdad83.zip"))
+                .thenReturn("https://bucket.s3.us-east-2.amazonaws.com/soundkits/packages/27bda7bf-16c5-4810-907c-2a9428fdad83.zip?X-Amz-Signature=abc123xyz");
+
+        SoundKitDownloadResponse response = soundKitService.getDownloadUrl(id, user);
+
+        assertNotNull(response);
+        assertEquals("https://bucket.s3.us-east-2.amazonaws.com/soundkits/packages/27bda7bf-16c5-4810-907c-2a9428fdad83.zip?X-Amz-Signature=abc123xyz", response.downloadUrl());
+        assertEquals(900L, response.expiresInSeconds());
+        verify(storageService).generateDownloadUrl("soundkits/packages/27bda7bf-16c5-4810-907c-2a9428fdad83.zip");
+    }
+
+    @Test
+    @DisplayName("Deve recusar download quando usuário não está autenticado")
+    void testGetDownloadUrlWithoutUserThrowsAccessDenied() {
+        UUID id = UUID.randomUUID();
+        assertThrows(AccessDeniedException.class, () -> soundKitService.getDownloadUrl(id, null));
+    }
+
+    @Test
+    @DisplayName("Deve lançar NotFound quando o SoundKit não existe ou está inativo")
+    void testGetDownloadUrlNonexistentThrowsNotFound() {
+        UUID id = UUID.randomUUID();
+        JWTUserData user = new JWTUserData(new UserId(), "buyer@soniclab.com", UserRole.USER);
+        when(soundKitRepository.findByIdAndActiveTrue(new SoundKitId(id))).thenReturn(Optional.empty());
+
+        assertThrows(SoundKitNotFoundException.class, () -> soundKitService.getDownloadUrl(id, user));
     }
 
     // ------------------------------------------------------------------

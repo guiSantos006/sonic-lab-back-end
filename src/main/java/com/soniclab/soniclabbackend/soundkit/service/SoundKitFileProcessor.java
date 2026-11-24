@@ -4,6 +4,10 @@ import com.soniclab.soniclabbackend.soundkit.dto.response.SoundKitUploadResponse
 import com.soniclab.soniclabbackend.soundkit.entity.AudioDemo;
 import com.soniclab.soniclabbackend.soundkit.storage.FileStorageService;
 import com.soniclab.soniclabbackend.soundkit.storage.FileVisibility;
+import javazoom.jl.decoder.Bitstream;
+import javazoom.jl.decoder.Decoder;
+import javazoom.jl.decoder.Header;
+import javazoom.jl.decoder.SampleBuffer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -46,10 +50,10 @@ public class SoundKitFileProcessor {
             "wav", "mp3", "aiff", "flac", "ogg"
     );
 
-    private static final int DEFAULT_WAVEFORM_POINTS = 100;
+    public static final int DEFAULT_WAVEFORM_POINTS = 100;
 
-    // Limites de proteção (ajuste conforme sua necessidade)
-    private static final long MAX_DEMO_BYTES = 100L * 1024 * 1024;               // 20 MB
+    // Limites de proteção
+    private static final long MAX_DEMO_BYTES = 100L * 1024 * 1024;                  // 100 MB
     private static final int MAX_ZIP_ENTRIES = 1_000;
     private static final long MAX_ZIP_UNCOMPRESSED_BYTES = 2L * 1024 * 1024 * 1024; // 2 GB
 
@@ -59,13 +63,15 @@ public class SoundKitFileProcessor {
         this.storageService = storageService;
     }
 
+    public record AudioAnalysisResult(Integer durationInSeconds, List<Float> waveform) {}
+
     // =====================================================================
-    // PACOTE (PRIVADO) — retorna a KEY, não uma URL
+    // PACOTE (PRIVADO) — armazena com visibilidade PRIVATE e retorna a KEY
     // =====================================================================
 
     /**
      * Processa um ZIP ou lista de arquivos soltos, valida e armazena o ZIP final consolidado.
-     * O campo "fileUrl" do response agora contém a KEY no bucket (renomeie para fileKey no DTO).
+     * Retorna a chave persistente no storage (fileKey / fileUrl).
      */
     public SoundKitUploadResponse processAndStorePackage(List<MultipartFile> files) {
         if (files == null || files.isEmpty()) {
@@ -92,7 +98,7 @@ public class SoundKitFileProcessor {
 
             try (InputStream is = Files.newInputStream(tempZipFile)) {
                 String key = storageService.upload(storagePath, is, totalBytes, "application/zip", FileVisibility.PRIVATE);
-                return new SoundKitUploadResponse(key, totalBytes, totalSamples);
+                return new SoundKitUploadResponse(key, key, totalBytes, totalSamples);
             }
 
         } catch (IOException e) {
@@ -113,7 +119,8 @@ public class SoundKitFileProcessor {
     // =====================================================================
 
     /**
-     * Processa a demonstração de áudio: salva no storage, calcula duração e extrai a waveform.
+     * Processa a demonstração de áudio: salva no storage com visibilidade pública,
+     * decodifica o áudio (suportando MP3 e WAV), calcula duração e extrai a waveform.
      */
     public AudioDemo processAudioDemo(MultipartFile file) {
         if (file == null || file.isEmpty()) {
@@ -132,7 +139,7 @@ public class SoundKitFileProcessor {
         String contentType = file.getContentType() != null ? file.getContentType() : "application/octet-stream";
 
         try {
-            // Lê uma única vez; o array serve para upload e para análise
+            // Lê uma única vez; os bytes servem tanto para upload quanto para análise
             byte[] audioBytes = file.getBytes();
 
             String key;
@@ -141,42 +148,185 @@ public class SoundKitFileProcessor {
             }
             String fileUrl = storageService.getPublicUrl(key);
 
-            Integer durationInSeconds = null;
-            List<Float> waveform = Collections.emptyList();
+            // Decodificação real e análise de amplitude (suporte completo a MP3 e WAV)
+            AudioAnalysisResult analysis = analyzeAudio(audioBytes, originalFilename, ext);
 
-            try (AudioInputStream audioInputStream = AudioSystem.getAudioInputStream(
-                    new BufferedInputStream(new ByteArrayInputStream(audioBytes)))) {
-
-                AudioFormat format = audioInputStream.getFormat();
-                long frames = audioInputStream.getFrameLength();
-                if (frames > 0 && format.getFrameRate() > 0) {
-                    durationInSeconds = (int) Math.round((double) frames / format.getFrameRate());
-                }
-
-                waveform = extractWaveform(audioInputStream, DEFAULT_WAVEFORM_POINTS);
-
-            } catch (UnsupportedAudioFileException e) {
-                // Formato sem codec nativo no Java (ex.: MP3): a URL continua válida
-                log.warn("Formato de áudio sem suporte para análise: {}", originalFilename);
-            } catch (Exception e) {
-                log.warn("Falha ao analisar o áudio da demo {}", originalFilename, e);
-            }
-
-            return new AudioDemo(fileUrl, durationInSeconds, waveform);
+            return new AudioDemo(fileUrl, analysis.durationInSeconds(), analysis.waveform());
 
         } catch (IOException e) {
             throw new RuntimeException("Erro ao processar demo de áudio: " + e.getMessage(), e);
         }
     }
 
+    /**
+     * Roteia a análise do áudio para o decodificador adequado (JLayer para MP3, Java Sound para WAV/PCM).
+     * Inclui mecanismo de fallback bidirecional para arquivos com extensões divergentes.
+     */
+    public AudioAnalysisResult analyzeAudio(byte[] audioBytes, String filename, String ext) {
+        boolean isMp3 = ".mp3".equalsIgnoreCase(ext)
+                || (filename != null && filename.toLowerCase(Locale.ROOT).endsWith(".mp3"));
+
+        if (isMp3) {
+            try {
+                return analyzeMp3(audioBytes);
+            } catch (Exception e) {
+                log.warn("Falha na decodificação MP3 via JLayer para '{}', tentando decodificação alternativa via Java Sound: {}", filename, e.getMessage());
+                try {
+                    return analyzeViaAudioSystem(audioBytes);
+                } catch (Exception ex) {
+                    log.warn("Formato de áudio sem suporte para análise: {}", filename);
+                    return new AudioAnalysisResult(null, Collections.emptyList());
+                }
+            }
+        } else {
+            try {
+                return analyzeViaAudioSystem(audioBytes);
+            } catch (UnsupportedAudioFileException e) {
+                // Caso seja um MP3 renomeado com outra extensão (ex: .wav)
+                try {
+                    return analyzeMp3(audioBytes);
+                } catch (Exception ex) {
+                    log.warn("Formato de áudio sem suporte para análise: {}", filename);
+                    return new AudioAnalysisResult(null, Collections.emptyList());
+                }
+            } catch (Exception e) {
+                log.warn("Falha ao analisar o áudio da demo {}", filename, e);
+                return new AudioAnalysisResult(null, Collections.emptyList());
+            }
+        }
+    }
+
+    /**
+     * Decodifica áudio MP3 (MPEG Layer 3) diretamente para PCM utilizando JLayer,
+     * calcula a duração exata e extrai a forma de onda normalizada.
+     */
+    public AudioAnalysisResult analyzeMp3(byte[] audioBytes) throws Exception {
+        Bitstream bitstream = new Bitstream(new ByteArrayInputStream(audioBytes));
+        Decoder decoder = new Decoder();
+        Header frameHeader;
+        int sampleRate = 0;
+        int channels = 0;
+        List<short[]> pcmChunks = new ArrayList<>();
+        int totalSamples = 0;
+
+        try {
+            while ((frameHeader = bitstream.readFrame()) != null) {
+                SampleBuffer output = (SampleBuffer) decoder.decodeFrame(frameHeader, bitstream);
+                if (sampleRate == 0) {
+                    sampleRate = output.getSampleFrequency();
+                    channels = output.getChannelCount();
+                }
+                short[] buffer = output.getBuffer();
+                int len = output.getBufferLength();
+                if (len > 0) {
+                    short[] chunk = new short[len];
+                    System.arraycopy(buffer, 0, chunk, 0, len);
+                    pcmChunks.add(chunk);
+                    totalSamples += len;
+                }
+                bitstream.closeFrame();
+            }
+        } finally {
+            try {
+                bitstream.close();
+            } catch (Exception ignored) {
+            }
+        }
+
+        if (totalSamples == 0 || channels <= 0 || sampleRate <= 0) {
+            throw new IllegalArgumentException("Nenhum frame de áudio decodificado do arquivo MP3.");
+        }
+
+        int totalFrames = totalSamples / channels;
+        int durationInSeconds = (int) Math.round((double) totalFrames / sampleRate);
+
+        // Consolida todas as amostras PCM 16-bit
+        short[] allSamples = new short[totalSamples];
+        int destPos = 0;
+        for (short[] chunk : pcmChunks) {
+            System.arraycopy(chunk, 0, allSamples, destPos, chunk.length);
+            destPos += chunk.length;
+        }
+
+        List<Float> waveform = calculateWaveformFromPcm16(allSamples, totalFrames, channels, DEFAULT_WAVEFORM_POINTS);
+        return new AudioAnalysisResult(durationInSeconds, waveform);
+    }
+
+    /**
+     * Analisa áudio PCM nativo (WAV, AIFF) via Java Sound AudioSystem.
+     */
+    public AudioAnalysisResult analyzeViaAudioSystem(byte[] audioBytes) throws Exception {
+        try (AudioInputStream audioInputStream = AudioSystem.getAudioInputStream(
+                new BufferedInputStream(new ByteArrayInputStream(audioBytes)))) {
+
+            AudioFormat format = audioInputStream.getFormat();
+            long frames = audioInputStream.getFrameLength();
+            Integer durationInSeconds = null;
+            if (frames > 0 && format.getFrameRate() > 0) {
+                durationInSeconds = (int) Math.round((double) frames / format.getFrameRate());
+            }
+
+            List<Float> waveform = extractWaveform(audioInputStream, DEFAULT_WAVEFORM_POINTS);
+
+            return new AudioAnalysisResult(durationInSeconds, waveform);
+        }
+    }
+
+    /**
+     * Calcula o waveform a partir de um array PCM 16-bit contínuo, dividindo em buckets
+     * de amplitude RMS e normalizando o pico máximo entre 0.0 e 1.0.
+     */
+    public List<Float> calculateWaveformFromPcm16(short[] samples, int totalFrames, int channels, int points) {
+        if (totalFrames <= 0 || points <= 0 || samples.length == 0) {
+            return Collections.emptyList();
+        }
+
+        int framesPerBucket = Math.max(1, totalFrames / points);
+        float[] rawRms = new float[points];
+        float maxRms = 0.0f;
+
+        for (int i = 0; i < points; i++) {
+            int startFrame = i * framesPerBucket;
+            int endFrame = Math.min(startFrame + framesPerBucket, totalFrames);
+            double sumSquares = 0.0;
+            int sampleCount = 0;
+
+            for (int f = startFrame; f < endFrame; f++) {
+                int offset = f * channels;
+                for (int c = 0; c < channels; c++) {
+                    int idx = offset + c;
+                    if (idx < samples.length) {
+                        float normalized = Math.abs(samples[idx] / 32768.0f);
+                        sumSquares += (double) normalized * normalized;
+                        sampleCount++;
+                    }
+                }
+            }
+
+            float rms = sampleCount > 0 ? (float) Math.sqrt(sumSquares / sampleCount) : 0.0f;
+            rawRms[i] = rms;
+            if (rms > maxRms) {
+                maxRms = rms;
+            }
+        }
+
+        List<Float> waveform = new ArrayList<>(points);
+        for (float r : rawRms) {
+            float normalized = maxRms > 0.0f ? (r / maxRms) : 0.0f;
+            waveform.add(Math.round(normalized * 100.0f) / 100.0f);
+        }
+
+        return waveform;
+    }
+
     // =====================================================================
-    // WAVEFORM
+    // WAVEFORM (AudioInputStream para WAV / AIFF)
     // =====================================================================
 
     public List<Float> extractWaveform(AudioInputStream stream, int points) throws IOException {
         AudioFormat srcFormat = stream.getFormat();
 
-        // Converte para 16-bit PCM little-endian quando possível
+        // Converte para 16-bit PCM little-endian quando suportado
         AudioInputStream pcmStream = stream;
         AudioFormat targetFormat = new AudioFormat(
                 AudioFormat.Encoding.PCM_SIGNED,

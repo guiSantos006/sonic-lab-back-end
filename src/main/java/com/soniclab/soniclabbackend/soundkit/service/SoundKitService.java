@@ -2,14 +2,15 @@ package com.soniclab.soniclabbackend.soundkit.service;
 
 import com.soniclab.soniclabbackend.soundkit.dto.request.CreateSoundKitRequest;
 import com.soniclab.soniclabbackend.soundkit.dto.request.SoundKitFilterParams;
-import com.soniclab.soniclabbackend.soundkit.dto.response.PageResponse;
-import com.soniclab.soniclabbackend.soundkit.dto.response.SoundKitResponse;
 import com.soniclab.soniclabbackend.soundkit.dto.request.UpdateSoundKitRequest;
+import com.soniclab.soniclabbackend.soundkit.dto.response.PageResponse;
+import com.soniclab.soniclabbackend.soundkit.dto.response.SoundKitDownloadResponse;
+import com.soniclab.soniclabbackend.soundkit.dto.response.SoundKitResponse;
 import com.soniclab.soniclabbackend.soundkit.entity.SoundKit;
 import com.soniclab.soniclabbackend.soundkit.entity.SoundKitId;
 import com.soniclab.soniclabbackend.soundkit.exception.SoundKitNotFoundException;
 import com.soniclab.soniclabbackend.soundkit.repository.SoundKitRepository;
-
+import com.soniclab.soniclabbackend.soundkit.storage.FileStorageService;
 import com.soniclab.soniclabbackend.user.config.JWTUserData;
 import com.soniclab.soniclabbackend.user.entity.UserRole;
 import org.springframework.data.domain.Page;
@@ -22,6 +23,7 @@ import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.net.URI;
 import java.util.List;
 import java.util.UUID;
 import java.util.regex.Pattern;
@@ -31,10 +33,16 @@ public class SoundKitService {
 
     private final SoundKitRepository soundKitRepository;
     private final MongoTemplate mongoTemplate;
+    private final FileStorageService storageService;
 
-    public SoundKitService(SoundKitRepository soundKitRepository, MongoTemplate mongoTemplate) {
+    public SoundKitService(
+            SoundKitRepository soundKitRepository,
+            MongoTemplate mongoTemplate,
+            FileStorageService storageService
+    ) {
         this.soundKitRepository = soundKitRepository;
         this.mongoTemplate = mongoTemplate;
+        this.storageService = storageService;
     }
 
     @Transactional(readOnly = true)
@@ -79,7 +87,7 @@ public class SoundKitService {
         soundKit.setId(new SoundKitId());
         soundKit.setDescription(request.description());
         soundKit.setCoverUrl(request.coverUrl());
-        soundKit.setFileUrl(request.fileUrl());
+        soundKit.setFileUrl(normalizeFileKey(request.fileUrl()));
         soundKit.setAudioDemo(request.audioDemo());
 
         if (request.tags() != null) {
@@ -99,7 +107,7 @@ public class SoundKitService {
         SoundKit soundKit = soundKitRepository.findByIdAndActiveTrue(new SoundKitId(id))
                 .orElseThrow(() -> new SoundKitNotFoundException("SoundKit não encontrado: " + id));
 
-        //  somente o dono do kit pode edita
+        // somente o dono do kit pode editar
         if (!soundKit.getCreatorId().equals(user.userId())) {
             throw new AccessDeniedException("Você não tem permissão para editar esse SoundKit");
         }
@@ -131,6 +139,71 @@ public class SoundKitService {
 
         soundKit.setActive(false);
         soundKitRepository.save(soundKit);
+    }
+
+    /**
+     * Gera sob demanda a URL temporária para download do pacote do kit (ZIP privado).
+     * Requer autenticação do usuário. Suporta compatibilidade com registros antigos no MongoDB.
+     */
+    @Transactional(readOnly = true)
+    public SoundKitDownloadResponse getDownloadUrl(UUID id, JWTUserData user) {
+        if (user == null) {
+            throw new AccessDeniedException("Usuário não autenticado para download");
+        }
+
+        SoundKit soundKit = soundKitRepository.findByIdAndActiveTrue(new SoundKitId(id))
+                .orElseThrow(() -> new SoundKitNotFoundException("SoundKit não encontrado: " + id));
+
+        String persistentKey = normalizeFileKey(soundKit.getFileUrl());
+        String downloadUrl = storageService.generateDownloadUrl(persistentKey);
+
+        return new SoundKitDownloadResponse(downloadUrl, 900L);
+    }
+
+    /**
+     * Extrai e normaliza a chave estável de armazenamento (ex: "soundkits/packages/xyz.zip")
+     * a partir de URLs locais com localhost, URLs do S3 ou chaves relativas.
+     */
+    public static String normalizeFileKey(String rawKeyOrUrl) {
+        if (rawKeyOrUrl == null || rawKeyOrUrl.isBlank()) {
+            throw new IllegalArgumentException("A referência ao arquivo do kit (fileUrl/fileKey) é obrigatória.");
+        }
+        String trimmed = rawKeyOrUrl.trim();
+
+        // Descarta query parameters se presentes
+        int queryIdx = trimmed.indexOf('?');
+        if (queryIdx >= 0) {
+            trimmed = trimmed.substring(0, queryIdx);
+        }
+
+        // Se contiver o prefixo canônico do pacote, extrai a partir dele
+        int pkgIdx = trimmed.indexOf("soundkits/packages/");
+        if (pkgIdx >= 0) {
+            return trimmed.substring(pkgIdx);
+        }
+
+        // Se for URL HTTP/HTTPS genérica
+        if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) {
+            try {
+                URI uri = URI.create(trimmed);
+                String path = uri.getPath();
+                while (path.startsWith("/")) {
+                    path = path.substring(1);
+                }
+                if (path.startsWith("uploads/")) {
+                    path = path.substring("uploads/".length());
+                }
+                return path;
+            } catch (Exception ignored) {
+            }
+        }
+
+        // Normalização de separadores
+        String normalized = trimmed.replace("\\", "/");
+        while (normalized.startsWith("/")) {
+            normalized = normalized.substring(1);
+        }
+        return normalized;
     }
 
     private Query buildQuery(SoundKitFilterParams filter) {
