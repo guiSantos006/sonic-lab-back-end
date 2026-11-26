@@ -1,7 +1,8 @@
 # ===================================================================
-# Stage 1: Build com JDK 21 e Gradle Wrapper (Gradle 9.7.1)
+# Stage 1: Build com JDK 21.0.13.1 (CVE-2026-114938 corrigida) e Gradle Wrapper
+# Eclipse Temurin 21.0.13.1+2 — tag fixada para evitar regressao de seguranca
 # ===================================================================
-FROM eclipse-temurin:21-jdk-jammy AS builder
+FROM eclipse-temurin:21.0.13.1_2-jdk-jammy AS builder
 
 WORKDIR /workspace
 
@@ -17,9 +18,10 @@ COPY src ./src
 RUN ./gradlew bootJar --no-daemon
 
 # ===================================================================
-# Stage 2: Runtime leve com JRE 21 (glibc para JAVE/FFmpeg nativo)
+# Stage 2: Runtime leve com JRE 21.0.13.1 (glibc para JAVE/FFmpeg nativo)
+# Eclipse Temurin 21.0.13.1+2 — tag fixada para evitar regressao de seguranca
 # ===================================================================
-FROM eclipse-temurin:21-jre-jammy AS runtime
+FROM eclipse-temurin:21.0.13.1_2-jre-jammy AS runtime
 
 # Cria usuario e grupo nao-root
 RUN groupadd --system --gid 1001 soniclab \

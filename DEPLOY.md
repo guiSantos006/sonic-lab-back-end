@@ -16,7 +16,19 @@ Este documento descreve como construir, configurar e publicar o **Sonic Lab Back
 
 ---
 
-## 2. Variáveis de Ambiente
+## 2. Versão do Java e Segurança — CVE-2026-114938
+
+> **⚠️ Vulnerabilidade crítica:** CVE-2026-114938 ("Java4Shell") — heap out-of-bounds write no intrinsic AVX-512 VBMI do `java.util.Base64` no HotSpot x86-64 (JDK 21). Entrada não confiável que atinja `java.util.Base64` em CPUs com AVX-512 VBMI pode levar à corrupção de memória. Esta aplicação usa `com.auth0:java-jwt`, que decodifica segmentos dos JWTs via `Base64` — portanto a vulnerabilidade é diretamente relevante.
+>
+> **Versão corrigida:** OpenJDK / Eclipse Temurin **`21.0.13.1+2`** (lançado em novembro de 2026).
+>
+> **Status no Dockerfile:** As imagens base estão fixadas em `eclipse-temurin:21.0.13.1_2-jdk-jammy` (builder) e `eclipse-temurin:21.0.13.1_2-jre-jammy` (runtime), garantindo o patch independentemente do cache do Render ou do Docker Hub.
+>
+> **Mitigação temporária** (caso esteja preso em uma JVM anterior): adicione `-XX:-UseBASE64Intrinsics` em `JAVA_TOOL_OPTIONS` para desabilitar o intrinsic afetado. Não é necessário com `21.0.13.1+2`.
+
+---
+
+## 3. Variáveis de Ambiente
 
 | Variável | Obrigatória | Descrição |
 |---|---|---|
@@ -48,7 +60,7 @@ Este documento descreve como construir, configurar e publicar o **Sonic Lab Back
 
 ---
 
-## 3. Construção e Execução Local do Container Docker
+## 4. Construção e Execução Local do Container Docker
 
 ### Build da imagem
 
@@ -57,8 +69,10 @@ docker build -t sonic-lab-backend:prod .
 ```
 
 O `Dockerfile` usa build multi-stage:
-1. **Stage `builder`** (`eclipse-temurin:21-jdk-jammy`): executa `./gradlew bootJar --no-daemon` com Gradle 9.7.1.
-2. **Stage `runtime`** (`eclipse-temurin:21-jre-jammy`): imagem enxuta JRE 21 com usuário não-root (`soniclab`), suporte glibc para o binário FFmpeg embarcado no JAVE 3.5.0 e limites de heap adequados para containers de 512 MB (`-XX:MaxRAMPercentage=70.0`).
+1. **Stage `builder`** (`eclipse-temurin:21.0.13.1_2-jdk-jammy`): executa `./gradlew bootJar --no-daemon` com Gradle 9.7.1.
+2. **Stage `runtime`** (`eclipse-temurin:21.0.13.1_2-jre-jammy`): imagem enxuta JRE 21 com usuário não-root (`soniclab`), suporte glibc para o binário FFmpeg embarcado no JAVE 3.5.0 e limites de heap adequados para containers de 512 MB (`-XX:MaxRAMPercentage=70.0`).
+
+Ambas as imagens base estão fixadas na versão **`21.0.13.1+2`** (patch da CVE-2026-114938).
 
 ### Execução local em modo desenvolvimento (com MongoDB do Docker Compose)
 
@@ -95,7 +109,7 @@ docker run --rm -p 8080:8080 \
 
 ---
 
-## 4. Configuração do MongoDB Atlas
+## 5. Configuração do MongoDB Atlas
 
 1. Crie um cluster **M0 (Free)** no MongoDB Atlas.
 2. Em **Database Access**, crie um usuário de banco dedicado com permissão `readWrite` no banco `soniclab_db`.
@@ -105,7 +119,7 @@ docker run --rm -p 8080:8080 \
 
 ---
 
-## 5. Configuração do AWS S3 (Menor Privilégio)
+## 6. Configuração do AWS S3 (Menor Privilégio)
 
 A arquitetura separa estritamente objetos **públicos** e **privados** dentro do mesmo bucket:
 
@@ -185,7 +199,7 @@ Crie um usuário IAM programático (ex: `soniclab-backend-s3`) com a política m
 
 ---
 
-## 6. Deploy no Render
+## 7. Deploy no Render
 
 1. No painel do Render, crie um novo **Web Service** conectado ao repositório GitHub do backend.
 2. Em **Language / Runtime**, selecione **Docker** (o Render detectará o `Dockerfile` na raiz automaticamente).
@@ -194,12 +208,12 @@ Crie um usuário IAM programático (ex: `soniclab-backend-s3`) com a política m
    ```
    /health
    ```
-5. Em **Environment Variables**, cadastre todas as variáveis obrigatórias da seção 2 (`SPRING_PROFILES_ACTIVE=prod`, `MONGODB_URI`, `JWT_SECRET`, `FRONTEND_URL`, `STORAGE_TYPE=s3`, `S3_BUCKET`, `AWS_REGION`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, além das credenciais SMTP do Mailtrap).
+5. Em **Environment Variables**, cadastre todas as variáveis obrigatórias da seção 3 (`SPRING_PROFILES_ACTIVE=prod`, `MONGODB_URI`, `JWT_SECRET`, `FRONTEND_URL`, `STORAGE_TYPE=s3`, `S3_BUCKET`, `AWS_REGION`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, além das credenciais SMTP do Mailtrap).
 6. Inicie o deploy e acompanhe a aba **Logs**.
 
 ---
 
-## 7. Health Check e Monitoramento de Logs
+## 8. Health Check e Monitoramento de Logs
 
 ### Endpoint de Health Check
 
@@ -216,7 +230,7 @@ Os logs são emitidos diretamente para `stdout`/`stderr`:
 
 ---
 
-## 8. Diagnóstico de Falhas Comuns
+## 9. Diagnóstico de Falhas Comuns
 
 | Sintoma | Causa Provável | Resolução |
 |---|---|---|
@@ -225,5 +239,5 @@ Os logs são emitidos diretamente para `stdout`/`stderr`:
 | Erro de CORS no navegador | `FRONTEND_URL` diferente do domínio real acessado na Vercel (ex: `http` vs `https` ou barra final `/`). | Verifique o domínio exato no `Origin` do navegador e atualize `FRONTEND_URL`. |
 | Timeout no upload de demo (`504` ou conexão encerrada) | Plano gratuito do Render tem timeout HTTP de 30s e RAM de 512 MB; transcodificação de WAV próximo a 20 MB pode exceder o tempo. | Envie demos já em MP3 ou arquivos WAV menores; mantenha `MAX_DEMO_BYTES` conservador (<= 20 MB). |
 | Erro ao enviar e-mail de recuperação (`Connection timed out`) | Provedor de nuvem bloqueando saída na porta `587`. | Altere `MAIL_PORT=2525` (suportada pelo Mailtrap Sandbox). |
-| Acesso negado (`403`) ao abrir capa ou demo no S3 | Bucket Policy restrita aos prefixos `soundkits/covers/*` e `soundkits/demos/*` ainda não aplicada ou Block Public Policy ativo no bucket. | Revise a seção 5 deste guia. |
+| Acesso negado (`403`) ao abrir capa ou demo no S3 | Bucket Policy restrita aos prefixos `soundkits/covers/*` e `soundkits/demos/*` ainda não aplicada ou Block Public Policy ativo no bucket. | Revise a seção 6 deste guia. |
 | Primeiro acesso demora ~30-60 segundos | *Spin down* por inatividade de 15 minutos no plano gratuito do Render (*cold start*). | Comportamento normal do plano gratuito; requisições subsequentes respondem normalmente. |

@@ -1,8 +1,8 @@
 # AGENT_CONTEXT.md — Sonic Lab Backend
 
 > **Documento de Continuidade Operacional para Agentes de IA e Engenharia**  
-> **Última atualização:** 24/11/2026  
-> **Status do projeto:** Fase 1 (Auditoria e Diagnóstico) e Fase 2 (Consolidação de Decisões) concluídas. Fase 3 (Implementação) aguarda autorização explícita (`PODE IMPLEMENTAR`). Nenhum arquivo de código foi alterado até o momento.
+> **Última atualização:** 26/11/2026  
+> **Status do projeto:** Fases 1-5 concluídas. Build, testes (78/78) e E2E em container Docker verificados. CVE-2026-114938 mitigada com pin de tag Docker.
 
 ---
 
@@ -38,6 +38,7 @@ O **Sonic Lab** é um marketplace e ecossistema digital voltado para produtores 
 ### Requisitos e Versões
 
 - **JDK:** Java 21 (Toolchain configurada no Gradle: `JavaLanguageVersion.of(21)`).
+  - **Atenção:** o PATH do Windows pode apontar para Java 8 (`java -version` retorna `1.8.0_461`). O Gradle Wrapper resolve o JDK 21 internamente via toolchain — o build funciona corretamente assim mesmo.
 - **Gradle:** 9.7.1 via Gradle Wrapper (`gradlew`, `gradlew.bat`).
 - **Build Tool:** Plugin Spring Boot `4.1.1`, Freefair Lombok `9.5.0`, AWS SDK BOM `2.56.0`.
 
@@ -84,7 +85,10 @@ com.soniclab.soniclabbackend
 ├── config/
 │   ├── MongoConfig.java               # Habilita auditoria e registra MongoCustomConversions
 │   ├── MongoConverter.java            # Interface base para conversores customizados
-│   └── OpenAPIConfig.java             # Documentação OpenAPI/Swagger 3.1.1
+│   ├── OpenAPIConfig.java             # Documentação OpenAPI/Swagger 3.1.1
+│   └── ProductionStartupValidator.java # Validação fail-fast de segurança em produção
+├── health/
+│   └── HealthController.java          # GET /health → {"status":"UP"} (público)
 ├── soundkit/
 │   ├── config/                        # SoundKitBeforeConvertCallback, SoundKitMongoConverters
 │   ├── controller/
@@ -156,12 +160,12 @@ Contrato implementado por [`LocalStorageService`](file:///C:/Users/T-GAMER/Docum
    - Retorna `{"coverUrl": "https://..."}`.
 
 3. **Áudio Demo (`POST /soundkits/uploads/demo`):**
-   - Aceita WAV, MP3, AIFF, FLAC, OGG (limite original no código: 100MB).
+   - Aceita WAV, MP3, AIFF, FLAC, OGG (limite configurável via `MAX_DEMO_BYTES`, default 20MB).
    - Se formato não-MP3: transcodifica para MP3 estéreo 192 kbps 44.1 kHz via JAVE/FFmpeg (`libmp3lame`).
    - Salvo sob prefixo `soundkits/demos/{UUID}.mp3` com `FileVisibility.PUBLIC`.
    - Análise de áudio em streaming (blocos de 256 frames): calcula duração exata e extrai 100 pontos normalizados de RMS (0.0 a 1.0).
    - Retorna `AudioDemo(url, durationInSeconds, waveformData)`.
-   - **`AudioDemo.url` armazena a URL pública permanente** (ex: `https://bucket.s3.region.amazonaws.com/...`).
+   - **`AudioDemo.url` armazena a URL pública completa** (ex: `https://bucket.s3.region.amazonaws.com/...`).
 
 4. **Persistência do Kit (`POST /soundkits`):**
    - [`SoundKitService.create()`](file:///C:/Users/T-GAMER/Documents/Programacao/SONIC_LABfiles/SONIC_LAB/sonic-lab-back-end/src/main/java/com/soniclab/soniclabbackend/soundkit/service/SoundKitService.java#L79) executa `normalizeFileKey(request.fileUrl())`.
@@ -259,97 +263,83 @@ flowchart LR
 9. **Sem RabbitMQ / Mensageria:** processamento de áudio permanece síncrono no backend nesta etapa.
 10. **Sem migração de dados legados:** banco do MongoDB Atlas começará vazio em produção.
 11. **Sem refatorações fora do escopo:** focar estritamente nas adaptações necessárias para containerização e publicação estável.
+12. **Tags Docker fixadas em `21.0.13.1_2`:** `eclipse-temurin:21.0.13.1_2-jdk-jammy` (builder) e `eclipse-temurin:21.0.13.1_2-jre-jammy` (runtime) — mitigação da CVE-2026-114938. Não usar tags flutuantes (`21-jdk-jammy`).
 
 ---
 
 ## 6. Problemas Identificados e Pendências
 
-### A. Problemas Confirmados (Necessitam Correção Obrigatória)
+### A. Problemas Confirmados (Corrigidos nas Fases 3-5)
 
-| ID | Descrição | Localização | Ação Necessária |
-|---|---|---|---|
-| **P1** | **Vulnerabilidade no reset de senha:** `AuthController.resetPassword()` invoca `tokenConfig.validateToken()` em vez de delegar para `AuthService.resetPassword()`. Com isso, tokens com `purpose="access"` conseguem redefinir senha e a assinatura `pwdSig` não é conferida, permitindo reutilização de tokens. | [`AuthController.java:92-116`](file:///C:/Users/T-GAMER/Documents/Programacao/SONIC_LABfiles/SONIC_LAB/sonic-lab-back-end/src/main/java/com/soniclab/soniclabbackend/user/controller/AuthController.java#L92-L116) | Delegar a execução para `AuthService.resetPassword()`, que já valida `purpose="password_reset"` e `pwdSig`. |
-| **P2** | **Insegurança do segredo JWT:** `application.properties` possui valor default de desenvolvimento para `api.security.token.secret`. Em produção, a aplicação deve falhar no startup se o segredo for fraco, nulo ou o padrão de dev. | [`application.properties:33`](file:///C:/Users/T-GAMER/Documents/Programacao/SONIC_LABfiles/SONIC_LAB/sonic-lab-back-end/src/main/resources/application.properties#L33) | Implementar validador fail-fast no startup exigindo segredo forte (≥256 bits) e diferente do padrão de dev quando em produção. |
-| **P3** | **Default divergente de `storage.type`:** `application.properties` define `${STORAGE_TYPE:s3}` enquanto `.env.example` define `local`. Sem variável explícita, a aplicação local tenta conectar ao S3 e falha. | [`application.properties:66`](file:///C:/Users/T-GAMER/Documents/Programacao/SONIC_LABfiles/SONIC_LAB/sonic-lab-back-end/src/main/resources/application.properties#L66) | Ajustar default para `${STORAGE_TYPE:local}` no `application.properties`. Produção definirá `STORAGE_TYPE=s3`. |
-| **P4** | **Inexistência de endpoint de Health Check:** o Render necessita de rota HTTP leve para monitoramento de liveness e readiness. | — | Criar `HealthController` com endpoint público `GET /health` respondendo `{"status":"UP"}` e liberá-lo no `SecurityConfig`. |
-| **P5** | **Ausência de Dockerfile e `.dockerignore`:** impede o build e deploy na plataforma Render. | Raiz do repositório | Criar Dockerfile multi-stage (build JDK 21 / runtime JRE 21) e `.dockerignore`. |
-
-### B. Riscos Técnicos que Precisam ser Validados em Runtime
-
-| ID | Risco | Mitigação Planejada |
+| ID | Descrição | Status |
 |---|---|---|
-| **R1** | **Compatibilidade do JAVE/FFmpeg nativo em container Linux:** `jave-all-deps:3.5.0` extrai binário FFmpeg para `/tmp`. Se `/tmp` tiver flag `noexec`, a conversão falha. | Testar execução do container Docker com arquivo WAV real. Imagem base Jammy/Debian garante `/tmp` executável. |
-| **R2** | **Timeout de 30s do Render durante conversão de áudio:** WAVs grandes transcodificados para MP3 podem exceder 30 segundos de CPU compartilhada no Render. | Reduzir `MAX_DEMO_BYTES` de 100MB para 20MB em [`SoundKitFileProcessor.java`](file:///C:/Users/T-GAMER/Documents/Programacao/SONIC_LABfiles/SONIC_LAB/sonic-lab-back-end/src/main/java/com/soniclab/soniclabbackend/soundkit/service/SoundKitFileProcessor.java#L70). |
-| **R3** | **Estouro de memória (OOM 512MB) no Render:** processamento simultâneo de áudio e descompactação de ZIPs grandes pode ultrapassar 512MB de RAM. | Configurar flags JVM no container (`-XX:MaxRAMPercentage=75.0`, `-XX:+ExitOnOutOfMemoryError`) e manter processamento estritamente síncrono. |
-| **R4** | **Porta SMTP bloqueada no Render:** alguns provedores de nuvem bloqueiam porta 587 de saída. | Configurar fallback documentado para porta `2525` do Mailtrap caso a porta `587` sofra timeout. |
+| **P1** | Vulnerabilidade no reset de senha: `AuthController.resetPassword()` invocava `validateToken()` em vez de delegar para `AuthService`. | ✅ **Corrigido** — delegação para `AuthService`, `TokenConfig.validateAccessToken()` agora exige `purpose=access`. |
+| **P2** | Segredo JWT sem validação fail-fast em produção. | ✅ **Corrigido** — `ProductionStartupValidator` aborta startup se ausente, fraco ou igual ao segredo de dev. |
+| **P3** | Default `storage.type=s3` em `application.properties` causava falha local sem variável explícita. | ✅ **Corrigido** — default alterado para `${STORAGE_TYPE:local}`. |
+| **P4** | Ausência de endpoint de Health Check para o Render. | ✅ **Corrigido** — `HealthController.java` em `GET /health`, liberado em `SecurityConfig`. |
+| **P5** | Ausência de Dockerfile e `.dockerignore`. | ✅ **Corrigido** — build multi-stage criado e validado em container Linux real. |
 
-### C. Fatos Confirmados vs. Hipóteses Esclarecidas
+### B. Riscos Técnicos — Status Após Validação
 
-- **Confirmado:** `@EnableAsync` **já está presente** em [`SonicLabBackEndApplication.java`](file:///C:/Users/T-GAMER/Documents/Programacao/SONIC_LABfiles/SONIC_LAB/sonic-lab-back-end/src/main/java/com/soniclab/soniclabbackend/SonicLabBackEndApplication.java). O diagnóstico inicial de que faltava `@EnableAsync` foi corrigido.
-- **Confirmado:** `@Async` utiliza o `SimpleAsyncTaskExecutor` padrão do Spring (sem pool limitado). Como o volume de reset de senha é baixo, não há necessidade de adicionar executor complexo nesta fase.
-- **Confirmado:** `RateLimitingFilter` extrai o IP real através do header `X-Forwarded-For`, sendo plenamente compatível com o proxy reverso do Render.
+| ID | Risco | Status |
+|---|---|---|
+| **R1** | Compatibilidade JAVE/FFmpeg nativo em container Linux. | ✅ **Validado** — E2E com WAV real: FFmpeg extraiu para `/tmp`, transcodificou para MP3, gerou 100 pontos de waveform. |
+| **R2** | Timeout 30s do Render durante conversão de áudio. | ⚠️ **Mitigado (conservador)** — `MAX_DEMO_BYTES=20MB` configurado. Demos WAV próximos a 20MB ainda correm risco; enviar MP3 é recomendado. |
+| **R3** | OOM 512MB no Render. | ⚠️ **Mitigado** — `-XX:MaxRAMPercentage=70.0 -XX:+ExitOnOutOfMemoryError` em `JAVA_TOOL_OPTIONS`. Monitorar em produção. |
+| **R4** | Porta SMTP 587 bloqueada no Render. | ⚠️ **Documentado** — usar `MAIL_PORT=2525` como alternativa (Mailtrap suporta ambas). |
+
+### C. Vulnerabilidade de Segurança — CVE-2026-114938
+
+| Item | Detalhe |
+|---|---|
+| **CVE** | CVE-2026-114938 ("Java4Shell") |
+| **Descrição** | Heap out-of-bounds write no intrinsic AVX-512 VBMI do `java.util.Base64` no HotSpot x86-64. Entrada não confiável em `Base64.getDecoder().decode()` pode causar corrupção de memória. |
+| **Versões afetadas** | Todas as versões do OpenJDK 21 anteriores a `21.0.13.1` |
+| **Versão com fix** | OpenJDK / Eclipse Temurin `21.0.13.1+2` (novembro de 2026) |
+| **Relevância** | `com.auth0:java-jwt:4.6.0` usa `Base64` para decodificar segmentos JWT — exposição direta via cabeçalho `Authorization`. |
+| **Status no Dockerfile** | ✅ **Corrigido** — tags fixadas em `eclipse-temurin:21.0.13.1_2-jdk-jammy` e `eclipse-temurin:21.0.13.1_2-jre-jammy`. |
+| **Mitigação emergencial** | Adicionar `-XX:-UseBASE64Intrinsics` em `JAVA_TOOL_OPTIONS` se impossível atualizar a imagem base imediatamente. |
 
 ---
 
-## 7. Plano de Implementação (Fase 3)
+## 7. Arquivos Criados e Modificados (Fases 3-5)
 
-A execução seguirá esta ordem sequencial estrita após aprovação:
+### Arquivos Criados
 
-```
-Passo 1: Correção de Segurança em AuthController (P1)
-   └── Delegar forgotPassword() e resetPassword() para AuthService
-   └── Garantir mapeamento de exceções e testes unitários
+| Arquivo | Função |
+|---|---|
+| [`Dockerfile`](file:///C:/Users/T-GAMER/Documents/Programacao/SONIC_LABfiles/SONIC_LAB/sonic-lab-back-end/Dockerfile) | Build multi-stage JDK 21.0.13.1_2 → JRE 21.0.13.1_2, usuário não-root, JAVE/glibc, limites de heap |
+| [`.dockerignore`](file:///C:/Users/T-GAMER/Documents/Programacao/SONIC_LABfiles/SONIC_LAB/sonic-lab-back-end/.dockerignore) | Exclui `.git`, `.gradle`, `build`, `.env*`, `uploads`, `tmp` do contexto Docker |
+| [`HealthController.java`](file:///C:/Users/T-GAMER/Documents/Programacao/SONIC_LABfiles/SONIC_LAB/sonic-lab-back-end/src/main/java/com/soniclab/soniclabbackend/health/HealthController.java) | `GET /health` → `{"status":"UP"}`, público, sem expor internals |
+| [`ProductionStartupValidator.java`](file:///C:/Users/T-GAMER/Documents/Programacao/SONIC_LABfiles/SONIC_LAB/sonic-lab-back-end/src/main/java/com/soniclab/soniclabbackend/config/ProductionStartupValidator.java) | Validação fail-fast: JWT_SECRET (entropia ≥128 bits), FRONTEND_URL (não localhost, HTTPS), MONGODB_URI (não localhost) |
+| [`application-prod.properties`](file:///C:/Users/T-GAMER/Documents/Programacao/SONIC_LABfiles/SONIC_LAB/sonic-lab-back-end/src/main/resources/application-prod.properties) | Sobrescreve defaults de dev; sem fallbacks locais; `storage.type=s3` |
+| [`DEPLOY.md`](file:///C:/Users/T-GAMER/Documents/Programacao/SONIC_LABfiles/SONIC_LAB/sonic-lab-back-end/DEPLOY.md) | Guia completo: env vars, Docker, Atlas, S3 policy/CORS/IAM, Render, CVE-2026-114938 |
+| Suítes de teste (`AuthControllerSecurityTest`, `ProductionStartupValidatorTest`, `SoundKitAudioTranscodingAndLimitsTest`) | 15 testes novos; total 78/78 passando |
 
-Passo 2: Endpoint de Health Check e Liberação de Segurança (P4)
-   └── Criar HealthController.java (GET /health)
-   └── Liberar /health no SecurityConfig.java sem autenticação
+### Arquivos Modificados
 
-Passo 3: Validação Fail-fast de JWT e Ajuste de Configurações (P2, P3, R2)
-   └── Adicionar validação de JWT_SECRET forte em produção
-   └── Ajustar storage.type=${STORAGE_TYPE:local} em application.properties
-   └── Reduzir MAX_DEMO_BYTES para 20MB em SoundKitFileProcessor.java
-   └── Atualizar .env.example com variáveis S3 e Atlas documentadas
-
-Passo 4: Criação do Dockerfile e .dockerignore (P5)
-   └── Dockerfile multi-stage: eclipse-temurin:21-jdk -> eclipse-temurin:21-jre
-   └── Configurar usuário não-root, diretório de trabalho, variáveis e entrypoint otimizado
-   └── .dockerignore excluindo build, git, .env, uploads locais
-
-Passo 5: Criação da Suíte de Testes de Segurança de Autenticação
-   └── Criar AuthControllerSecurityTest.java validando as 5 regras de reset de senha
-
-Passo 6: Documentação de Deploy (DEPLOY.md)
-   └── Passo a passo para Render, Atlas, S3 Bucket Policy e Vercel
-```
+| Arquivo | Alteração |
+|---|---|
+| [`AuthController.java`](file:///C:/Users/T-GAMER/Documents/Programacao/SONIC_LABfiles/SONIC_LAB/sonic-lab-back-end/src/main/java/com/soniclab/soniclabbackend/user/controller/AuthController.java) | Delegação de `resetPassword` para `AuthService` (fix da vulnerabilidade P1) |
+| [`TokenConfig.java`](file:///C:/Users/T-GAMER/Documents/Programacao/SONIC_LABfiles/SONIC_LAB/sonic-lab-back-end/src/main/java/com/soniclab/soniclabbackend/user/config/TokenConfig.java) | `validateAccessToken()` exige `purpose=access` |
+| [`SecurityConfig.java`](file:///C:/Users/T-GAMER/Documents/Programacao/SONIC_LABfiles/SONIC_LAB/sonic-lab-back-end/src/main/java/com/soniclab/soniclabbackend/user/config/SecurityConfig.java) | Permitiu `GET /health`; CORS restrito a `FRONTEND_URL` + localhost apenas em dev |
+| [`application.properties`](file:///C:/Users/T-GAMER/Documents/Programacao/SONIC_LABfiles/SONIC_LAB/sonic-lab-back-end/src/main/resources/application.properties) | `storage.type` default → `local`; `MAX_REQUEST_SIZE=200MB`; `app.audio.max-demo-bytes=20MB` |
+| [`SoundKitFileProcessor.java`](file:///C:/Users/T-GAMER/Documents/Programacao/SONIC_LABfiles/SONIC_LAB/sonic-lab-back-end/src/main/java/com/soniclab/soniclabbackend/soundkit/service/SoundKitFileProcessor.java) | `DEFAULT_MAX_DEMO_BYTES = 20MB` (configurável via `@Value`) |
+| [`S3StorageService.java`](file:///C:/Users/T-GAMER/Documents/Programacao/SONIC_LABfiles/SONIC_LAB/sonic-lab-back-end/src/main/java/com/soniclab/soniclabbackend/soundkit/storage/S3StorageService.java) | Logging estruturado sem vazar credenciais |
+| [`GlobalExceptionHandler.java`](file:///C:/Users/T-GAMER/Documents/Programacao/SONIC_LABfiles/SONIC_LAB/sonic-lab-back-end/src/main/java/com/soniclab/soniclabbackend/user/exception/GlobalExceptionHandler.java) | Handler para `IllegalArgumentException` → HTTP 400 |
+| [`.env.example`](file:///C:/Users/T-GAMER/Documents/Programacao/SONIC_LABfiles/SONIC_LAB/sonic-lab-back-end/.env.example) | Adicionou `SPRING_PROFILES_ACTIVE`, variáveis S3, `MAX_DEMO_BYTES`, nota porta 2525 |
 
 ---
 
 ## 8. Testes e Validações
 
-### 1. Testes Locais Automatizados (Executáveis sem nuvem)
-- `./gradlew clean test`:
-  - `SoundKitServiceTest`: validação de regras de kits e normalização de chaves.
-  - `SoundKitFileProcessorTest`: waveform real MP3/WAV, transcodificação, tolerância a falhas.
-  - `StorageConfigurationIntegrationTest`: alternância condicional de beans (`local` vs `s3`).
-  - `LocalStorageServiceTest`: CRUD em disco, path traversal security.
-  - `AuthControllerSecurityTest` (novo): validação de isolamento de tokens e `pwdSig`.
+### Testes Automatizados
+- `./gradlew clean test bootJar` → **BUILD SUCCESSFUL**, 78/78 testes aprovados.
 
-### 2. Testes de Build e Empacotamento
-- `./gradlew bootJar`: valida compilação limpa e empacotamento do JAR executável.
-
-### 3. Testes de Container Docker Local
-- `docker build -t sonic-lab-backend:test .`: validação do build multi-stage.
-- `docker run --rm -p 8080:8080 -e STORAGE_TYPE=local sonic-lab-backend:test`:
-  - Teste de chamada: `curl http://localhost:8080/health` (deve retornar 200 OK).
-  - Validação de ausência de erros de extração nativa do JAVE/FFmpeg no Linux.
-
-### 4. Testes de Integração com Serviços Reais (Pós-configuração manual)
-- **MongoDB Atlas:** conexão inicial via URI com TLS e criação automática de coleções/índices.
-- **AWS S3:**
-  - Upload de demo/cover e verificação de leitura pública via browser.
-  - Upload de pacote ZIP e verificação de bloqueio público direto (HTTP 403 esperado).
-  - Geração de Presigned URL e download autenticado bem-sucedido.
-- **Frontend Vercel:** teste de fluxo pontual via interface web sem bloqueios de CORS.
+### Testes de Container Docker
+- `docker build -t sonic-lab-backend:test .` → sucesso com `eclipse-temurin:21.0.13.1_2-jdk-jammy`.
+- `docker run --rm -e SPRING_PROFILES_ACTIVE=prod sonic-lab-backend:test` → fail-fast confirmado (startup abortado sem `JWT_SECRET`).
+- E2E completo com MongoDB local: `GET /health` 200 OK, registro/login, upload demo WAV (FFmpeg transcodificou para MP3, 100 pontos de waveform), upload ZIP/cover, criação de SoundKit, download com Presigned URL. Zero arquivos temporários residuais em `/tmp`.
 
 ---
 
@@ -357,7 +347,8 @@ Passo 6: Documentação de Deploy (DEPLOY.md)
 
 | Data | Etapa | Descrição / Resultado |
 |---|---|---|
-| **24/11/2026** | **Fase 1: Auditoria Técnica** | Inspeção detalhada de 100% dos pacotes, controllers, services, configurações e testes. Identificação dos problemas P1 a P5 e riscos R1 a R4. |
-| **24/11/2026** | **Fase 2: Consolidação** | Definição das decisões arquiteturais imutáveis (S3 menor privilégio, 20MB demos, URL completa em AudioDemo, object key em SoundKit). |
-| **24/11/2026** | **Documentação de Contexto** | Criação deste `AGENT_CONTEXT.md` na raiz do backend para servir de base às próximas sessões. |
-| **Pendente** | **Fase 3: Implementação** | **Aguardando confirmação expressa: `PODE IMPLEMENTAR`.** |
+| **24/11/2026** | **Fase 1: Auditoria Técnica** | Inspeção de 100% dos pacotes, controllers, services, configurações e testes. Identificação dos problemas P1-P5 e riscos R1-R4. |
+| **24/11/2026** | **Fase 2: Consolidação** | Decisões arquiteturais imutáveis definidas (S3 menor privilégio, 20MB demos, URL completa em AudioDemo, object key em SoundKit). |
+| **24/11/2026** | **Documentação de Contexto** | Criação do `AGENT_CONTEXT.md`. |
+| **25/11/2026** | **Fase 3-5: Implementação e Verificação** | Todos os arquivos criados/modificados. 78/78 testes. Build Docker e E2E em container Linux verificados. |
+| **26/11/2026** | **CVE-2026-114938** | Tags Docker fixadas em `21.0.13.1_2`. `DEPLOY.md` e `AGENT_CONTEXT.md` atualizados com seção de segurança. |
