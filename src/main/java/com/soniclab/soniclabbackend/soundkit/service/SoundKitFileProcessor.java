@@ -10,6 +10,8 @@ import javazoom.jl.decoder.Header;
 import javazoom.jl.decoder.SampleBuffer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
 import ws.schild.jave.Encoder;
@@ -66,15 +68,25 @@ public class SoundKitFileProcessor {
     /** Tamanho (em frames) dos blocos lidos durante a análise em streaming. */
     private static final int ANALYSIS_BLOCK_FRAMES = 256;
 
-    // Limites de proteção (ajuste conforme sua necessidade)
-    private static final long MAX_DEMO_BYTES = 100L * 1024 * 1024;                  // 100 MB
+    // Limites de proteção (adequados aos recursos do Render Free Tier)
+    public static final long DEFAULT_MAX_DEMO_BYTES = 20L * 1024 * 1024;           // 20 MB
     private static final int MAX_ZIP_ENTRIES = 1_000;
     private static final long MAX_ZIP_UNCOMPRESSED_BYTES = 2L * 1024 * 1024 * 1024; // 2 GB
 
     private final FileStorageService storageService;
+    private final long maxDemoBytes;
 
     public SoundKitFileProcessor(FileStorageService storageService) {
+        this(storageService, DEFAULT_MAX_DEMO_BYTES);
+    }
+
+    @Autowired
+    public SoundKitFileProcessor(
+            FileStorageService storageService,
+            @Value("${app.audio.max-demo-bytes:20971520}") long maxDemoBytes
+    ) {
         this.storageService = storageService;
+        this.maxDemoBytes = maxDemoBytes > 0 ? maxDemoBytes : DEFAULT_MAX_DEMO_BYTES;
     }
 
     public record AudioAnalysisResult(Integer durationInSeconds, List<Float> waveform) {}
@@ -112,10 +124,12 @@ public class SoundKitFileProcessor {
 
             try (InputStream is = Files.newInputStream(tempZipFile)) {
                 String key = storageService.upload(storagePath, is, totalBytes, "application/zip", FileVisibility.PRIVATE);
+                log.info("Pacote processado e enviado com sucesso (key={}, bytes={}, samples={})", key, totalBytes, totalSamples);
                 return new SoundKitUploadResponse(key, key, totalBytes, totalSamples);
             }
 
         } catch (IOException e) {
+            log.error("Erro de E/S ao processar pacote de áudio: {}", e.getMessage(), e);
             throw new RuntimeException("Erro ao processar pacote de áudio: " + e.getMessage(), e);
         } finally {
             deleteQuietly(tempZipFile);
@@ -128,7 +142,7 @@ public class SoundKitFileProcessor {
 
     /**
      * Processa a demonstração de áudio:
-     * - Se o arquivo não for MP3 (ex: WAV longo de 30-80MB), converte para MP3 otimizado para web.
+     * - Se o arquivo não for MP3 (ex: WAV longo), converte para MP3 otimizado para web.
      * - Salva no storage (S3/local) com visibilidade pública.
      * - Calcula a duração exata e extrai a waveform.
      */
@@ -136,9 +150,10 @@ public class SoundKitFileProcessor {
         if (file == null || file.isEmpty()) {
             throw new IllegalArgumentException("Arquivo de demonstração de áudio não pode ser vazio.");
         }
-        if (file.getSize() > MAX_DEMO_BYTES) {
+        if (file.getSize() > maxDemoBytes) {
+            long maxMb = Math.max(1L, maxDemoBytes / (1024 * 1024));
             throw new IllegalArgumentException(
-                    "O áudio de demonstração excede o limite de " + (MAX_DEMO_BYTES / 1024 / 1024) + " MB.");
+                    "O áudio de demonstração excede o limite de " + maxMb + " MB.");
         }
 
         String originalFilename = file.getOriginalFilename() != null ? file.getOriginalFilename() : "demo.wav";
@@ -164,7 +179,7 @@ public class SoundKitFileProcessor {
                 contentType = "audio/mpeg";
                 storageExt = ".mp3";
             } else {
-                // Converte WAV (ou FLAC/AIFF) para MP3 192kbps para otimização de streaming web
+                // Converte WAV (ou FLAC/AIFF/OGG) para MP3 192kbps para otimização de streaming web
                 tempMp3 = Files.createTempFile("demo-transcoded-", ".mp3");
                 convertToMp3(tempInput.toFile(), tempMp3.toFile());
                 finalAudioFile = tempMp3;
@@ -193,9 +208,12 @@ public class SoundKitFileProcessor {
                 log.warn("Falha ao analisar o áudio da demo {}", originalFilename, e);
             }
 
+            log.info("Áudio demo processado com sucesso (key={}, bytes={}, duration={}s, waveformPoints={})",
+                    key, sizeBytes, durationInSeconds, waveform.size());
             return new AudioDemo(fileUrl, durationInSeconds, waveform);
 
         } catch (IOException e) {
+            log.error("Erro de E/S ao processar demo de áudio '{}': {}", originalFilename, e.getMessage(), e);
             throw new RuntimeException("Erro ao processar demo de áudio: " + e.getMessage(), e);
         } finally {
             deleteQuietly(tempInput);
@@ -221,6 +239,7 @@ public class SoundKitFileProcessor {
             Encoder encoder = new Encoder();
             encoder.encode(new MultimediaObject(source), target, attrs);
         } catch (Exception e) {
+            log.error("Falha na conversão de áudio para MP3 via JAVE/FFmpeg: {}", e.getMessage(), e);
             throw new RuntimeException("Falha na conversão do áudio para MP3: " + e.getMessage(), e);
         }
     }

@@ -74,7 +74,7 @@ public class TokenConfig {
                     .verify(token);
 
             String purpose = decodedJWT.getClaim("purpose").asString();
-            if (PURPOSE_PASSWORD_RESET.equals(purpose)) {
+            if (!PURPOSE_ACCESS.equals(purpose)) {
                 return Optional.empty();
             }
 

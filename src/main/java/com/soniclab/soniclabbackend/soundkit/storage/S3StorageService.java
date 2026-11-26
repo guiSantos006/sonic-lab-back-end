@@ -113,12 +113,17 @@ public class S3StorageService implements FileStorageService {
                     .build();
 
             s3Client.putObject(request, RequestBody.fromInputStream(in, contentLength));
+            log.info("Upload S3 concluído (bucket={}, key={}, visibility={})", bucket, key, effectiveVisibility);
             return key;
         } catch (S3Exception e) {
-            throw new RuntimeException("Falha ao enviar arquivo para o S3: " + key + " (status: " + e.statusCode() + ", awsError: " + e.awsErrorDetails().errorMessage() + ")", e);
+            String awsMsg = e.awsErrorDetails() != null ? e.awsErrorDetails().errorMessage() : e.getMessage();
+            log.error("Falha S3 no upload (key={}, status={}, error={})", key, e.statusCode(), awsMsg);
+            throw new RuntimeException("Falha ao enviar arquivo para o S3: " + key + " (status: " + e.statusCode() + ", awsError: " + awsMsg + ")", e);
         } catch (SdkException e) {
+            log.error("Falha de comunicação AWS SDK no upload (key={}): {}", key, e.getMessage());
             throw new RuntimeException("Falha de comunicação com o S3 ao enviar arquivo: " + key, e);
         } catch (IOException e) {
+            log.error("Falha de E/S ao ler stream para upload S3 (key={}): {}", key, e.getMessage());
             throw new RuntimeException("Falha de E/S ao ler arquivo para upload: " + key, e);
         }
     }
@@ -171,8 +176,10 @@ public class S3StorageService implements FileStorageService {
             PresignedGetObjectRequest presigned = presigner.presignGetObject(presignRequest);
             return presigned.url().toExternalForm();
         } catch (S3Exception e) {
+            log.error("Falha S3 ao gerar presigned URL (key={}, status={})", normalizedKey, e.statusCode());
             throw new RuntimeException("Falha ao gerar URL pré-assinada no S3 para a chave: " + normalizedKey + " (status: " + e.statusCode() + ")", e);
         } catch (SdkException e) {
+            log.error("Falha AWS SDK ao gerar presigned URL (key={}): {}", normalizedKey, e.getMessage());
             throw new RuntimeException("Falha ao gerar URL pré-assinada para a chave: " + normalizedKey, e);
         }
     }
@@ -186,8 +193,10 @@ public class S3StorageService implements FileStorageService {
                     .key(key)
                     .build());
         } catch (S3Exception e) {
+            log.error("Falha S3 ao deletar objeto (key={}, status={})", key, e.statusCode());
             throw new RuntimeException("Falha ao deletar arquivo no S3: " + key + " (status: " + e.statusCode() + ")", e);
         } catch (SdkException e) {
+            log.error("Falha AWS SDK ao deletar objeto (key={}): {}", key, e.getMessage());
             throw new RuntimeException("Falha de comunicação com o S3 ao deletar arquivo: " + key, e);
         }
     }
@@ -210,10 +219,12 @@ public class S3StorageService implements FileStorageService {
             if (e.statusCode() == 404) {
                 return false;
             }
+            log.error("Falha S3 ao verificar existência do objeto (status={})", e.statusCode());
             throw new RuntimeException("Falha ao verificar existência do arquivo no S3: " + keyOrUrl, e);
         } catch (IllegalArgumentException e) {
             return false;
         } catch (SdkException e) {
+            log.error("Falha AWS SDK ao verificar existência do objeto: {}", e.getMessage());
             throw new RuntimeException("Falha de comunicação com o S3 ao verificar existência: " + keyOrUrl, e);
         }
     }
