@@ -1,5 +1,6 @@
 package com.soniclab.soniclabbackend.user.controller;
 
+import com.soniclab.soniclabbackend.user.config.JWTUserData;
 import com.soniclab.soniclabbackend.user.dto.response.UserResponse;
 import com.soniclab.soniclabbackend.user.entity.User;
 import org.springframework.security.core.Authentication;
@@ -13,9 +14,13 @@ public class UserController {
 
     @GetMapping("/me")
     public UserResponse me(Authentication authentication) {
-        User user = (User) authentication.getPrincipal();
-        return UserResponse.fromEntity(user);
+        JWTUserData userData = (JWTUserData) authentication.getPrincipal();
+        return new UserResponse(
+                userData.userId() != null ? userData.userId().uuid() : null,
+                userData.name(),
+                userData.email(),
+                userData.role()
+        );
     }
 }
-
 

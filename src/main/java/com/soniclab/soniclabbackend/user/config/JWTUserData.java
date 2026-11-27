@@ -5,5 +5,9 @@ import com.soniclab.soniclabbackend.user.entity.UserRole;
 import lombok.Builder;
 
 @Builder
-public record JWTUserData(UserId userId, String email, UserRole role) {
-}
+public record JWTUserData(
+        UserId userId,
+        String name,
+        String email,
+        UserRole role
+) {}

@@ -38,7 +38,7 @@ public class TokenConfig {
                     .withIssuer(issuer)
                     .withSubject(user.getEmail())
                     .withClaim("userId", user.getId().uuid().toString())
-                    .withClaim("name", user.getUsername()) // <-- Verifique se o getter na classe User é getUsername() ou getName()
+                    .withClaim("name", user.getName())
                     .withClaim("role", user.getUserRole() != null ? user.getUserRole().name() : UserRole.USER.name())
                     .withClaim("purpose", PURPOSE_ACCESS)
                     .withExpiresAt(getExpirationDate())
@@ -80,8 +80,10 @@ public class TokenConfig {
             }
 
             String rawUserId = decodedJWT.getClaim("userId").asString();
+            String name = decodedJWT.getClaim("name").asString();
             String email = decodedJWT.getSubject();
             String rawRole = decodedJWT.getClaim("role").asString();
+
 
             UserId userId = (rawUserId != null && !rawUserId.isBlank())
                     ? new UserId(UUID.fromString(rawUserId))
@@ -93,6 +95,7 @@ public class TokenConfig {
 
             JWTUserData userData = JWTUserData.builder()
                     .userId(userId)
+                    .name(name)
                     .email(email)
                     .role(role)
                     .build();
