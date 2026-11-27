@@ -48,7 +48,8 @@ public class AuthService {
         User user = (User) authentication.getPrincipal();
         String token = tokenConfig.generateToken(user);
 
-        return new LoginResponse(token, user.getName(), user.getEmail(), user.getUserRole().name());
+        String role = user.getUserRole() != null ? user.getUserRole().name() : UserRole.USER.name();
+        return new LoginResponse(token, user.getName(), user.getEmail(), role);
     }
 
     public RegisterUserResponse register(RegisterUserRequest request) {

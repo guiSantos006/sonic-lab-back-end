@@ -38,6 +38,7 @@ public class TokenConfig {
                     .withIssuer(issuer)
                     .withSubject(user.getEmail())
                     .withClaim("userId", user.getId().uuid().toString())
+                    .withClaim("name", user.getUsername()) // <-- Verifique se o getter na classe User é getUsername() ou getName()
                     .withClaim("role", user.getUserRole() != null ? user.getUserRole().name() : UserRole.USER.name())
                     .withClaim("purpose", PURPOSE_ACCESS)
                     .withExpiresAt(getExpirationDate())
