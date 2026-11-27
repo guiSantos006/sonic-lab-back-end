@@ -56,8 +56,18 @@ public class AwsS3Config {
                 .credentialsProvider(credentialsProvider);
 
         if (endpoint != null && !endpoint.isBlank()) {
-            log.info("Configurando endpoint customizado para S3Client: {}", endpoint);
-            builder.endpointOverride(URI.create(endpoint.trim()));
+            URI endpointUri = URI.create(endpoint.trim());
+
+            if (endpointUri.getScheme() == null ||
+                    (!endpointUri.getScheme().equals("https") &&
+                            !endpointUri.getScheme().equals("http"))) {
+                throw new IllegalArgumentException(
+                        "S3 endpoint deve possuir esquema HTTP ou HTTPS. Valor recebido: " + endpoint
+                );
+            }
+
+            log.info("Configurando endpoint customizado para S3Client.");
+            builder.endpointOverride(endpointUri);
         }
 
         if (pathStyleAccess) {
@@ -82,8 +92,18 @@ public class AwsS3Config {
                 .credentialsProvider(credentialsProvider);
 
         if (endpoint != null && !endpoint.isBlank()) {
-            log.info("Configurando endpoint customizado para S3Presigner: {}", endpoint);
-            builder.endpointOverride(URI.create(endpoint.trim()));
+            URI endpointUri = URI.create(endpoint.trim());
+
+            if (endpointUri.getScheme() == null ||
+                    (!endpointUri.getScheme().equals("https") &&
+                            !endpointUri.getScheme().equals("http"))) {
+                throw new IllegalArgumentException(
+                        "S3 endpoint deve possuir esquema HTTP ou HTTPS. Valor recebido: " + endpoint
+                );
+            }
+
+            log.info("Configurando endpoint customizado para S3Client.");
+            builder.endpointOverride(endpointUri);
         }
 
         if (pathStyleAccess) {
